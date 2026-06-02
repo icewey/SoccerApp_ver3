@@ -153,6 +153,7 @@ let enemyMixer = null;
 let enemyCurrent = null;
 let enemyState = 'chase'; // 'chase' | 'dribble'
 let enemyTackling = false;
+let enemyKicking  = false;
 let enemyPickupCooldown = 0;
 let enemyTackleCooldown = 0;
 let hasEnemy = false;
@@ -293,6 +294,7 @@ function fadeToEnemyClip(name, loop = true) {
 // ── 敵シュート ────────────────────────────────────────────────────────────
 function enemyShoot() {
   if (ballOwner !== 'enemy') return;
+  enemyKicking = true;
   fadeToEnemyClip('kick', false);
   const aimZ   = (Math.random() - 0.5) * 5;
   const goal   = new THREE.Vector3(-52.5, 1.0, aimZ);
@@ -494,7 +496,7 @@ function updateEnemy(dt) {
   }
 
   // アニメーション
-  if (!enemyTackling) {
+  if (!enemyTackling && !enemyKicking) {
     let anim = 'idle';
     if (moving) anim = (ballOwner === 'enemy' && clips['dribble']) ? 'dribble' : 'run';
     fadeToEnemyClip(anim);
@@ -794,6 +796,7 @@ function resetAfterGoal() {
     enemy.rotation.y = 0;
     enemyState          = 'chase';
     enemyTackling       = false;
+    enemyKicking        = false;
     enemyPickupCooldown = 0;
     enemyTackleCooldown = 0;
     if (enemyMixer) { enemyMixer.stopAllAction(); enemyCurrent = null; }
@@ -950,9 +953,8 @@ export function startGame(config) {
         scene.add(enemy);
         enemyMixer = new THREE.AnimationMixer(fbx);
         enemyMixer.addEventListener('finished', e => {
-          if (clips['tackle'] && e.action === enemyMixer.clipAction(clips['tackle'])) {
-            enemyTackling = false;
-          }
+          if (clips['tackle'] && e.action === enemyMixer.clipAction(clips['tackle'])) enemyTackling = false;
+          if (clips['kick']   && e.action === enemyMixer.clipAction(clips['kick']))   enemyKicking  = false;
         });
         // 赤いマーカー
         const marker = new THREE.Mesh(
