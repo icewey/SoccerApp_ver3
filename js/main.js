@@ -424,7 +424,7 @@ function updateTeammate(dt) {
   }
 
   // 敵ボール保持中 → 接近で奪取
-  if (ballOwner === 'enemy' && hasEnemy && teammatePickupCooldown <= 0) {
+  if (ballOwner === 'enemy' && hasEnemy && teammatePickupCooldown <= 0 && !enemyKicking) {
     const dToBall = new THREE.Vector3().subVectors(ballMesh.position, teammate.position);
     dToBall.y = 0;
     if (dToBall.length() < DRIBBLE_DIST * 1.2) {
