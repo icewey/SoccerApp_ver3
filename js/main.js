@@ -330,6 +330,18 @@ function getTeammateTargetPos() {
   return pos;
 }
 
+// ── 共通 CPU 移動（移動 + 方向スナップ、trueなら実際に移動した）──────────
+function cpuMove(entity, targetPos, speed, dt) {
+  const to = new THREE.Vector3().subVectors(targetPos, entity.position);
+  to.y = 0;
+  const dist = to.length();
+  if (dist < 0.4) return false;
+  to.divideScalar(dist); // normalize in-place
+  entity.position.addScaledVector(to, Math.min(dist, speed * dt));
+  entity.rotation.y = Math.atan2(-to.x, -to.z);
+  return true;
+}
+
 function updateTeammate(dt) {
   if (!hasTeammate || !gameStarted || !teammateMixer || isGoalScene) return;
   teammateMixer.update(dt);
@@ -346,26 +358,13 @@ function updateTeammate(dt) {
     if (teammateState === 'chase' && (ballOwner === 'player' || ballOwner === 'teammate')) teammateState = 'support';
   }
 
-  const targetPos = getTeammateTargetPos();
-  const toTarget  = new THREE.Vector3().subVectors(targetPos, teammate.position);
-  toTarget.y = 0;
-  const dist  = toTarget.length();
-  const moving = dist > 0.4 && !teammateKicking;
-
+  const targetPos      = getTeammateTargetPos();
   const chaseOrReceive = teammateState === 'chase' || teammateState === 'receive';
-  if (moving) {
-    const speed = (dist > 4 || chaseOrReceive) ? TEAMMATE_RUN_SPEED : TEAMMATE_SPEED;
-    const dir   = toTarget.clone().normalize();
-    teammate.position.addScaledVector(dir, Math.min(dist, speed * dt));
-    // なめらかに向きを変える
-    const targetRot = Math.atan2(-dir.x, -dir.z);
-    let dRot = targetRot - teammate.rotation.y;
-    while (dRot >  Math.PI) dRot -= Math.PI * 2;
-    while (dRot < -Math.PI) dRot += Math.PI * 2;
-    teammate.rotation.y += dRot * Math.min(1, 10 * dt);
-  }
-  teammate.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, teammate.position.x));
-  teammate.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, teammate.position.z));
+  const distToTarget   = new THREE.Vector3().subVectors(targetPos, teammate.position).setY(0).length();
+  const tmSpeed        = (distToTarget > 4 || chaseOrReceive) ? TEAMMATE_RUN_SPEED : TEAMMATE_SPEED;
+  const moving         = !teammateKicking && cpuMove(teammate, targetPos, tmSpeed, dt);
+  teammate.position.x  = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, teammate.position.x));
+  teammate.position.z  = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, teammate.position.z));
 
   // シュート判定: ペナルティエリア幅内(|z|<=20.16)かつ角度OK かつ十分近い
   const PENALTY_Z = 20.16;
@@ -434,21 +433,9 @@ function updateEnemy(dt) {
   }
 
   // 移動
-  const toTarget    = new THREE.Vector3().subVectors(targetPos, enemy.position);
-  toTarget.y = 0;
-  const distToTarget = toTarget.length();
-  const moving = distToTarget > 0.4 && !enemyTackling && !enemyKicking;
-
-  if (moving) {
-    const speed = distToTarget > 4 ? ENEMY_RUN_SPEED : ENEMY_SPEED;
-    const dir   = toTarget.clone().normalize();
-    enemy.position.addScaledVector(dir, Math.min(distToTarget, speed * dt));
-    const targetRot = Math.atan2(-dir.x, -dir.z);
-    let dRot = targetRot - enemy.rotation.y;
-    while (dRot >  Math.PI) dRot -= Math.PI * 2;
-    while (dRot < -Math.PI) dRot += Math.PI * 2;
-    enemy.rotation.y = targetRot;
-  }
+  const distToTarget = new THREE.Vector3().subVectors(targetPos, enemy.position).setY(0).length();
+  const enSpeed      = distToTarget > 4 ? ENEMY_RUN_SPEED : ENEMY_SPEED;
+  const moving       = !enemyTackling && !enemyKicking && cpuMove(enemy, targetPos, enSpeed, dt);
 
   // タックル中は向いてる方向に前進
   if (enemyTackling) {
