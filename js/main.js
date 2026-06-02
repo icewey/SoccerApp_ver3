@@ -404,7 +404,7 @@ function updateEnemy(dt) {
   const distEnemyBall = toEnemyBall.length();
 
   // タックルによる奪取
-  if (enemyTackling && ballOwner !== 'enemy' && distEnemyBall < ENEMY_TACKLE_RANGE && enemyPickupCooldown <= 0 && !isKicking) {
+  if (enemyTackling && ballOwner !== 'enemy' && distEnemyBall < ENEMY_TACKLE_RANGE && enemyPickupCooldown <= 0 && !isKicking && !teammateKicking) {
     ballOwner = 'enemy';
     playerPickupCooldown   = 0.6;
     teammatePickupCooldown = 0.6;
@@ -494,7 +494,7 @@ function updateBall(dt) {
   if (enemyPickupCooldown    > 0) enemyPickupCooldown    -= dt;
 
   if (ballOwner === 'player'   && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
-  if (ballOwner === 'teammate' &&  distTeam   >= DRIBBLE_DIST * 1.5)                               ballOwner = 'none';
+  if (ballOwner === 'teammate' &&  distTeam   >= DRIBBLE_DIST * 1.5 && !teammateKicking)            ballOwner = 'none';
   if (ballOwner === 'enemy'   &&  distEnemy  >= DRIBBLE_DIST * 1.5 && !enemyKicking)              ballOwner = 'none';
   if (ballOwner === 'none') {
     if      (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) ballOwner = 'player';
@@ -503,7 +503,7 @@ function updateBall(dt) {
   }
   // タックル中にボールが射程内 → 所有権奪取
   const TACKLE_DIST = 1.6;
-  if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0 && !(ballOwner === 'enemy' && enemyKicking)) {
+  if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0 && !(ballOwner === 'enemy' && enemyKicking) && !(ballOwner === 'teammate' && teammateKicking)) {
     ballOwner = 'player';
     teammatePickupCooldown = 0.5;
     enemyPickupCooldown    = 0.5;
