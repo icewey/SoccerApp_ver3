@@ -296,20 +296,25 @@ function enemyShoot() {
   if (ballOwner !== 'enemy') return;
   enemyKicking = true;
   fadeToEnemyClip('kick', false);
-  const aimZ   = (Math.random() - 0.5) * 5;
-  const goal   = new THREE.Vector3(-52.5, 1.0, aimZ);
-  const toGoal = new THREE.Vector3().subVectors(goal, ballMesh.position);
-  toGoal.y = 0;
-  const dist   = toGoal.length();
-  const dir    = toGoal.normalize();
-  const hSpeed = Math.min(24, Math.max(14, dist * 1.1));
-  const vSpeed = dist > 18 ? 7 : 4;
-  ballVel.set(dir.x * hSpeed, vSpeed, dir.z * hSpeed);
-  ballCurveRate        = 0;
-  ballOwner            = 'none';
-  isDribbling          = false;
-  enemyPickupCooldown  = 1.5;
-  enemyState           = 'chase';
+  // プレイヤーと同様、キックアニメの55%タイミングでボール発射
+  const delay = clips['kick'] ? clips['kick'].duration * 0.55 * 1000 : 300;
+  setTimeout(() => {
+    if (ballOwner !== 'enemy') return;
+    const aimZ   = (Math.random() - 0.5) * 5;
+    const goal   = new THREE.Vector3(-52.5, 1.0, aimZ);
+    const toGoal = new THREE.Vector3().subVectors(goal, ballMesh.position);
+    toGoal.y = 0;
+    const dist   = toGoal.length();
+    const dir    = toGoal.normalize();
+    const hSpeed = Math.min(24, Math.max(14, dist * 1.1));
+    const vSpeed = dist > 18 ? 7 : 4;
+    ballVel.set(dir.x * hSpeed, vSpeed, dir.z * hSpeed);
+    ballCurveRate       = 0;
+    ballOwner           = 'none';
+    isDribbling         = false;
+    enemyPickupCooldown = 1.5;
+    enemyState          = 'chase';
+  }, delay);
 }
 
 // ── チームメートアニメーション ────────────────────────────────────────────
@@ -466,7 +471,7 @@ function updateEnemy(dt) {
   const toTarget    = new THREE.Vector3().subVectors(targetPos, enemy.position);
   toTarget.y = 0;
   const distToTarget = toTarget.length();
-  const moving = distToTarget > 0.4 && !enemyTackling;
+  const moving = distToTarget > 0.4 && !enemyTackling && !enemyKicking;
 
   if (moving) {
     const speed = distToTarget > 4 ? ENEMY_RUN_SPEED : ENEMY_SPEED;
