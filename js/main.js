@@ -497,9 +497,9 @@ function updateBall(dt) {
   if (ballOwner === 'teammate' &&  distTeam   >= DRIBBLE_DIST * 1.5 && !teammateKicking)            ballOwner = 'none';
   if (ballOwner === 'enemy'   &&  distEnemy  >= DRIBBLE_DIST * 1.5 && !enemyKicking)              ballOwner = 'none';
   if (ballOwner === 'none') {
-    if      (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) ballOwner = 'player';
-    else if (distTeam   < DRIBBLE_DIST && !isKicking && teammatePickupCooldown <= 0) ballOwner = 'teammate';
-    else if (hasEnemy && distEnemy < DRIBBLE_DIST && enemyPickupCooldown <= 0 && !isKicking) ballOwner = 'enemy';
+    if      (distPlayer < DRIBBLE_DIST && !isKicking && !enemyKicking && !teammateKicking && playerPickupCooldown <= 0)  ballOwner = 'player';
+    else if (distTeam   < DRIBBLE_DIST && !isKicking && !enemyKicking && teammatePickupCooldown <= 0)                    ballOwner = 'teammate';
+    else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && !teammateKicking && enemyPickupCooldown <= 0)         ballOwner = 'enemy';
   }
   // タックル中にボールが射程内 → 所有権奪取
   const TACKLE_DIST = 1.6;
