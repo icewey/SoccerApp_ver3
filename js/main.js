@@ -1011,6 +1011,92 @@ function getDesiredAnim() {
 }
 
 
+// ── スピンエフェクト ──────────────────────────────────────────────────────────
+const spinParticles = [];
+const spinRings     = [];
+const spinGhosts    = [];
+let _spinDustTimer  = 0;
+let _spinGhostTimer = 0;
+let _prevSpinning   = false;
+
+function spawnSpinBurst() {
+  for (let i = 0; i < 10; i++) {
+    const angle = (i / 10) * Math.PI * 2 + Math.random() * 0.4;
+    const spd   = 1.8 + Math.random() * 2.5;
+    const mesh  = new THREE.Mesh(
+      new THREE.SphereGeometry(0.055 + Math.random() * 0.04, 4, 4),
+      new THREE.MeshBasicMaterial({ color: 0xd4b483, transparent: true, opacity: 0.9 })
+    );
+    mesh.position.copy(player.position);
+    mesh.position.y = 0.08;
+    scene.add(mesh);
+    spinParticles.push({
+      mesh,
+      vel: new THREE.Vector3(Math.cos(angle) * spd, 1.2 + Math.random() * 2, Math.sin(angle) * spd),
+      life: 0,
+      maxLife: 0.35 + Math.random() * 0.2
+    });
+  }
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.4, 0.035, 6, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffee55, transparent: true, opacity: 0.9 })
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.copy(player.position);
+  ring.position.y = 0.06;
+  scene.add(ring);
+  spinRings.push({ mesh: ring, life: 0, maxLife: 0.45 });
+}
+
+function spawnSpinGhost() {
+  const mesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.22, 1.1, 4, 8),
+    new THREE.MeshBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.28, depthWrite: false })
+  );
+  mesh.position.copy(player.position);
+  mesh.position.y += 0.7;
+  mesh.rotation.y = player.rotation.y;
+  scene.add(mesh);
+  spinGhosts.push({ mesh, life: 0, maxLife: 0.25 });
+}
+
+function updateSpinEffects(dt) {
+  for (let i = spinParticles.length - 1; i >= 0; i--) {
+    const p = spinParticles[i];
+    p.life += dt;
+    const t = p.life / p.maxLife;
+    p.mesh.position.addScaledVector(p.vel, dt);
+    p.vel.y -= 6 * dt;
+    p.mesh.material.opacity = 0.9 * (1 - t * t);
+    p.mesh.scale.setScalar(1 + t * 0.8);
+    if (p.life >= p.maxLife) {
+      scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose();
+      spinParticles.splice(i, 1);
+    }
+  }
+  for (let i = spinRings.length - 1; i >= 0; i--) {
+    const r = spinRings[i];
+    r.life += dt;
+    const t = r.life / r.maxLife;
+    r.mesh.scale.setScalar(1 + t * 5);
+    r.mesh.material.opacity = 0.9 * (1 - t);
+    if (r.life >= r.maxLife) {
+      scene.remove(r.mesh); r.mesh.geometry.dispose(); r.mesh.material.dispose();
+      spinRings.splice(i, 1);
+    }
+  }
+  for (let i = spinGhosts.length - 1; i >= 0; i--) {
+    const g = spinGhosts[i];
+    g.life += dt;
+    const t = g.life / g.maxLife;
+    g.mesh.material.opacity = 0.28 * (1 - t);
+    if (g.life >= g.maxLife) {
+      scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose();
+      spinGhosts.splice(i, 1);
+    }
+  }
+}
+
 const clock = new THREE.Clock();
 
 function animate() {
@@ -1020,6 +1106,7 @@ function animate() {
   updateBall(dt);
   updateTeammate(dt);
   updateEnemy(dt);
+  updateSpinEffects(dt);
 
   if (gameStarted) {
   if (!isGoalScene) {
@@ -1097,6 +1184,16 @@ function animate() {
       player.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, player.position.x));
       player.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, player.position.z));
     }
+
+    // スピンエフェクト
+    if (isSpinning && isDribbling) {
+      if (!_prevSpinning) { spawnSpinBurst(); spawnSpinGhost(); _spinDustTimer = 0; _spinGhostTimer = 0; }
+      _spinDustTimer  += dt;
+      _spinGhostTimer += dt;
+      if (_spinDustTimer  >= 0.15)  { spawnSpinBurst(); _spinDustTimer  = 0; }
+      if (_spinGhostTimer >= 0.065) { spawnSpinGhost(); _spinGhostTimer = 0; }
+    }
+    _prevSpinning = isSpinning;
   } // end !isGoalScene
 
     // カメラ追従: ターゲット位置をスムーズに追い、そこから固定オフセット分で配置
