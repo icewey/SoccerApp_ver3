@@ -122,6 +122,12 @@ function kickOff() {
   const char = CHARACTERS[selectedIdx];
   if (!char.available) return;
 
+  // 選択されていないキャラからランダムに敵を選ぶ
+  const enemyCandidates = CHARACTERS.filter((c, i) => c.available && i !== selectedIdx);
+  const enemyChar = enemyCandidates.length > 0
+    ? enemyCandidates[Math.floor(Math.random() * enemyCandidates.length)]
+    : null;
+
   const lobby = document.getElementById('lobby');
   lobby.style.opacity = '0';
   lobby.style.pointerEvents = 'none';
@@ -130,7 +136,7 @@ function kickOff() {
   const loadingEl = document.getElementById('loading');
   loadingEl.style.display = 'flex';
 
-  startGame({ charFbx: char.fbx, withTeammate });
+  startGame({ charFbx: char.fbx, withTeammate, enemyFbx: enemyChar?.fbx ?? null });
 }
 
 function init() {
