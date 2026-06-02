@@ -431,7 +431,7 @@ function updateEnemy(dt) {
   const distEnemyBall = toEnemyBall.length();
 
   // タックルによる奪取
-  if (enemyTackling && ballOwner !== 'enemy' && distEnemyBall < ENEMY_TACKLE_RANGE && enemyPickupCooldown <= 0) {
+  if (enemyTackling && ballOwner !== 'enemy' && distEnemyBall < ENEMY_TACKLE_RANGE && enemyPickupCooldown <= 0 && !isKicking) {
     ballOwner = 'enemy';
     playerPickupCooldown   = 0.6;
     teammatePickupCooldown = 0.6;
@@ -494,7 +494,11 @@ function updateEnemy(dt) {
   }
 
   // アニメーション
-  if (!enemyTackling) fadeToEnemyClip(moving ? 'run' : 'idle');
+  if (!enemyTackling) {
+    let anim = 'idle';
+    if (moving) anim = (ballOwner === 'enemy' && clips['dribble']) ? 'dribble' : 'run';
+    fadeToEnemyClip(anim);
+  }
 }
 
 function updateBall(dt) {
@@ -522,7 +526,7 @@ function updateBall(dt) {
   if (ballOwner === 'none') {
     if      (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) ballOwner = 'player';
     else if (distTeam   < DRIBBLE_DIST && !isKicking && teammatePickupCooldown <= 0) ballOwner = 'teammate';
-    else if (hasEnemy && distEnemy < DRIBBLE_DIST && enemyPickupCooldown <= 0) ballOwner = 'enemy';
+    else if (hasEnemy && distEnemy < DRIBBLE_DIST && enemyPickupCooldown <= 0 && !isKicking) ballOwner = 'enemy';
   }
   // タックル中にボールが射程内 → 所有権奪取
   const TACKLE_DIST = 1.6;
@@ -1013,7 +1017,6 @@ function getDesiredAnim() {
 
 // ── スピンエフェクト ──────────────────────────────────────────────────────────
 const spinParticles = [];
-const spinRings     = [];
 const spinGhosts    = [];
 let _spinDustTimer  = 0;
 let _spinGhostTimer = 0;
@@ -1037,15 +1040,6 @@ function spawnSpinBurst() {
       maxLife: 0.35 + Math.random() * 0.2
     });
   }
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(0.4, 0.035, 6, 32),
-    new THREE.MeshBasicMaterial({ color: 0xffee55, transparent: true, opacity: 0.9 })
-  );
-  ring.rotation.x = Math.PI / 2;
-  ring.position.copy(player.position);
-  ring.position.y = 0.06;
-  scene.add(ring);
-  spinRings.push({ mesh: ring, life: 0, maxLife: 0.45 });
 }
 
 function spawnSpinGhost() {
@@ -1072,17 +1066,6 @@ function updateSpinEffects(dt) {
     if (p.life >= p.maxLife) {
       scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose();
       spinParticles.splice(i, 1);
-    }
-  }
-  for (let i = spinRings.length - 1; i >= 0; i--) {
-    const r = spinRings[i];
-    r.life += dt;
-    const t = r.life / r.maxLife;
-    r.mesh.scale.setScalar(1 + t * 5);
-    r.mesh.material.opacity = 0.9 * (1 - t);
-    if (r.life >= r.maxLife) {
-      scene.remove(r.mesh); r.mesh.geometry.dispose(); r.mesh.material.dispose();
-      spinRings.splice(i, 1);
     }
   }
   for (let i = spinGhosts.length - 1; i >= 0; i--) {
