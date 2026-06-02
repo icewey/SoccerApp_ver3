@@ -286,8 +286,9 @@ function fadeToEnemyClip(name, loop = true) {
   if (next === enemyCurrent && loop) return;
   next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
   next.clampWhenFinished = !loop;
-  if (enemyCurrent && enemyCurrent !== next) enemyCurrent.fadeOut(0.2);
-  next.reset().fadeIn(0.2).play();
+  if (enemyCurrent && enemyCurrent !== next) enemyCurrent.fadeOut(0.15);
+  // Tポーズ防止: 新アニメは即 weight=1 で開始
+  next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
   enemyCurrent = next;
 }
 
@@ -324,8 +325,8 @@ function fadeToTeammateClip(name, loop = true) {
   if (next === teammateCurrent && loop) return;
   next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
   next.clampWhenFinished = !loop;
-  if (teammateCurrent && teammateCurrent !== next) teammateCurrent.fadeOut(0.2);
-  next.reset().fadeIn(0.2).play();
+  if (teammateCurrent && teammateCurrent !== next) teammateCurrent.fadeOut(0.15);
+  next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
   teammateCurrent = next;
 }
 
@@ -492,7 +493,7 @@ function updateEnemy(dt) {
     let dRot = targetRot - enemy.rotation.y;
     while (dRot >  Math.PI) dRot -= Math.PI * 2;
     while (dRot < -Math.PI) dRot += Math.PI * 2;
-    enemy.rotation.y += dRot * Math.min(1, 10 * dt);
+    enemy.rotation.y = targetRot;
   }
 
   // タックル中は向いてる方向に前進
@@ -540,7 +541,7 @@ function updateBall(dt) {
 
   if (ballOwner === 'player'   && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
   if (ballOwner === 'teammate' &&  distTeam   >= DRIBBLE_DIST * 1.5)                               ballOwner = 'none';
-  if (ballOwner === 'enemy'   &&  distEnemy  >= DRIBBLE_DIST * 1.5)                               ballOwner = 'none';
+  if (ballOwner === 'enemy'   &&  distEnemy  >= DRIBBLE_DIST * 1.5 && !enemyKicking)              ballOwner = 'none';
   if (ballOwner === 'none') {
     if      (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) ballOwner = 'player';
     else if (distTeam   < DRIBBLE_DIST && !isKicking && teammatePickupCooldown <= 0) ballOwner = 'teammate';
@@ -548,7 +549,7 @@ function updateBall(dt) {
   }
   // タックル中にボールが射程内 → 所有権奪取
   const TACKLE_DIST = 1.6;
-  if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0) {
+  if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0 && !(ballOwner === 'enemy' && enemyKicking)) {
     ballOwner = 'player';
     teammatePickupCooldown = 0.5;
     enemyPickupCooldown    = 0.5;
@@ -742,8 +743,8 @@ function fadeToClip(name, loop = true) {
   if (next === current && loop) return;
   next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
   next.clampWhenFinished = !loop;
-  if (current && current !== next) current.fadeOut(0.2);
-  next.reset().fadeIn(0.2).play();
+  if (current && current !== next) current.fadeOut(0.15);
+  next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
   current = next;
 }
 
