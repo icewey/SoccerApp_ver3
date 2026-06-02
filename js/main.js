@@ -286,47 +286,26 @@ function enemyShoot() {
 
 // ── チームメートAI ────────────────────────────────────────────────────────
 function getTeammateTargetPos() {
+  // ドリブル: 常にゴール方向へ前進
   if (ballOwner === 'teammate') {
-    const distToGoal = 52.5 - teammate.position.x;
-    const angleRatio = distToGoal > 0 ? Math.abs(teammate.position.z) / distToGoal : 0;
-    if (angleRatio > 0.65 && distToGoal > 8) {
-      // 角度が悪い(サイドに寄り過ぎ): 中央に切り込む
-      return new THREE.Vector3(
-        Math.min(48, teammate.position.x + 6),
-        0,
-        teammate.position.z * 0.35
-      );
-    }
-    // 角度OK: ゴール正面へ
-    return new THREE.Vector3(45, 0, teammate.position.z * 0.3);
+    return new THREE.Vector3(52.5, 0, teammate.position.z * 0.3);
   }
+
+  // チェイス/プレス: ボールを追う（後退は最大15mに制限）
   if (teammateState === 'chase') {
-    // ルーズボールを追う
-    const bp = ballMesh.position.clone(); bp.y = 0;
-    return bp;
+    const bx = Math.max(ballMesh.position.x, teammate.position.x - 15);
+    const bz = ballMesh.position.z;
+    return new THREE.Vector3(bx, 0, bz);
   }
-  if (teammateState === 'receive') {
-    // ボールの飛軌道を先読みして走り込む
-    const spd = ballVel.length();
-    if (spd > 1.5) {
-      const approachDist = new THREE.Vector3().subVectors(teammate.position, ballMesh.position).length();
-      const t = Math.min(2, approachDist / spd);
-      const intercept = ballMesh.position.clone().addScaledVector(ballVel, t);
-      intercept.y = 0;
-      return intercept;
-    }
-    const bp = ballMesh.position.clone(); bp.y = 0;
-    return bp;
-  }
-  // サポートポジション（ボール基準・プレイヤー向き非依存）
-  const side = teammate.position.x >= 0 ? -1 : 1;
-  const pos  = new THREE.Vector3(
-    ballMesh.position.x + side * 12,
+
+  // サポート/レシーブ: 常にボールより前・サイドの受けポジション
+  const sideZ    = teammate.position.z >= 0 ? 10 : -10;
+  const supportX = Math.max(teammate.position.x, ballMesh.position.x + 8);
+  const pos      = new THREE.Vector3(
+    Math.min(FIELD_HALF_W - 3, supportX),
     0,
-    ballMesh.position.z - 4
+    Math.max(-FIELD_HALF_D + 5, Math.min(FIELD_HALF_D - 5, ballMesh.position.z + sideZ))
   );
-  pos.x = Math.max(-FIELD_HALF_W + 5, Math.min(FIELD_HALF_W - 5, pos.x));
-  pos.z = Math.max(-FIELD_HALF_D + 5, Math.min(FIELD_HALF_D - 5, pos.z));
   return pos;
 }
 
@@ -346,30 +325,45 @@ function updateTeammate(dt) {
   if (!hasTeammate || !gameStarted || !teammateMixer || isGoalScene) return;
   teammateMixer.update(dt);
 
-  // 状態遷移
+  // ── 状態遷移（シンプル3状態）
   if (ballOwner === 'teammate') {
     teammateState = 'dribble';
+  } else if (ballOwner === 'none' || ballOwner === 'enemy') {
+    if (teammateState !== 'receive') teammateState = 'chase';
+    if (teammateState === 'receive' && ballVel.lengthSq() < 1) teammateState = 'chase';
   } else {
-    if (teammateState === 'dribble') teammateState = 'support';
-    if (teammateState === 'receive' && (ballOwner === 'player' || ballVel.lengthSq() < 1)) teammateState = 'support';
-    // ルーズボール or 敵ボール → チェイス
-    if ((ballOwner === 'none' || ballOwner === 'enemy') && teammateState !== 'receive') teammateState = 'chase';
-    // 味方・プレイヤーが持ったらチェイス解除
-    if (teammateState === 'chase' && (ballOwner === 'player' || ballOwner === 'teammate')) teammateState = 'support';
+    // ballOwner === 'player'
+    teammateState = 'support';
   }
 
-  const targetPos      = getTeammateTargetPos();
-  const chaseOrReceive = teammateState === 'chase' || teammateState === 'receive';
-  const distToTarget   = new THREE.Vector3().subVectors(targetPos, teammate.position).setY(0).length();
-  const tmSpeed        = (distToTarget > 4 || chaseOrReceive) ? TEAMMATE_RUN_SPEED : TEAMMATE_SPEED;
-  const moving         = !teammateKicking && cpuMove(teammate, targetPos, tmSpeed, dt);
-  teammate.position.x  = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, teammate.position.x));
-  teammate.position.z  = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, teammate.position.z));
+  // ── 移動
+  const targetPos    = getTeammateTargetPos();
+  const distToTarget = new THREE.Vector3().subVectors(targetPos, teammate.position).setY(0).length();
+  const isChase      = teammateState === 'chase';
+  const tmSpeed      = (distToTarget > 4 || isChase) ? TEAMMATE_RUN_SPEED : TEAMMATE_SPEED;
+  const moving       = !teammateKicking && cpuMove(teammate, targetPos, tmSpeed, dt);
+  teammate.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, teammate.position.x));
+  teammate.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, teammate.position.z));
 
-  // シュート判定: ペナルティエリア幅内(|z|<=20.16)かつ角度OK かつ十分近い
+  // ── 向き: ドリブル・サポートは常にゴール方向（+x）を向く
+  // チェイス時のみ cpuMove が設定したボール方向を向く
+  if (!teammateKicking && teammateState !== 'chase') {
+    teammate.rotation.y = -Math.PI / 2; // +x方向（相手ゴール向き）
+  }
+
+  // ── ドリブル中はボールをこのフレームの向きで正確に配置（更新順序のズレを補正）
+  if (ballOwner === 'teammate') {
+    const facing = new THREE.Vector3(-Math.sin(teammate.rotation.y), 0, -Math.cos(teammate.rotation.y));
+    const ballTarget = teammate.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
+    ballTarget.y = BALL_R;
+    ballMesh.position.copy(ballTarget);
+    ballVel.set(0, 0, 0);
+  }
+
+  // ── シュート判定
   const PENALTY_Z = 20.16;
-  if (ballOwner === 'teammate' && teammate.position.x > 28
-      && Math.abs(teammate.position.z) <= PENALTY_Z) {
+  if (ballOwner === 'teammate' && !teammateKicking
+      && teammate.position.x > 28 && Math.abs(teammate.position.z) <= PENALTY_Z) {
     const distToGoal = 52.5 - teammate.position.x;
     const angleRatio = distToGoal > 0 ? Math.abs(teammate.position.z) / distToGoal : 0;
     if (angleRatio <= 0.65 || distToGoal <= 8) {
@@ -377,17 +371,17 @@ function updateTeammate(dt) {
     }
   }
 
-  // 敵ボール保持中 → 接近で奪取
+  // ── 敵ボール奪取
   if (ballOwner === 'enemy' && hasEnemy && teammatePickupCooldown <= 0 && !enemyKicking) {
     const dToBall = new THREE.Vector3().subVectors(ballMesh.position, teammate.position);
     dToBall.y = 0;
     if (dToBall.length() < DRIBBLE_DIST * 1.2) {
       ballOwner = 'teammate';
       enemyPickupCooldown = 0.8;
-      teammateState = 'dribble';
     }
   }
 
+  // ── アニメ
   if (!teammateKicking) fadeToTeammateClip(moving ? 'run' : 'idle');
 }
 
