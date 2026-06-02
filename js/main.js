@@ -1,0 +1,1081 @@
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+
+// ── Renderer ──────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+// ── Scene / Camera ────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.FogExp2(0x9ecde8, 0.006);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+camera.position.set(0, 10, 20);
+
+// ── Lighting ──────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xd6eaff, 0.7));
+const sun = new THREE.DirectionalLight(0xfffde0, 1.4);
+sun.position.set(60, 120, 40);
+sun.castShadow = true;
+sun.shadow.mapSize.setScalar(4096);
+Object.assign(sun.shadow.camera, { left: -80, right: 80, top: 80, bottom: -80, near: 1, far: 250 });
+scene.add(sun);
+const fillLight = new THREE.DirectionalLight(0xb0d4ff, 0.3);
+fillLight.position.set(-40, 30, -30);
+scene.add(fillLight);
+
+// ── Soccer Field ─────────────────────────────────────────────────────────
+function buildField() {
+  const root = new THREE.Group();
+  const stripeCount = 10, stripeW = 105 / stripeCount;
+  for (let i = 0; i < stripeCount; i++) {
+    const stripe = new THREE.Mesh(
+      new THREE.PlaneGeometry(stripeW, 68),
+      new THREE.MeshLambertMaterial({ color: i % 2 === 0 ? 0x2e7d32 : 0x388e3c })
+    );
+    stripe.rotation.x = -Math.PI / 2;
+    stripe.position.set(-52.5 + stripeW * (i + 0.5), 0, 0);
+    stripe.receiveShadow = true;
+    root.add(stripe);
+  }
+  const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  function line(w, d, x, z) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, d), white);
+    m.position.set(x, 0.01, z);
+    root.add(m);
+  }
+  line(105.2, 0.18, 0, 34); line(105.2, 0.18, 0, -34);
+  line(0.18, 68, 52.5, 0); line(0.18, 68, -52.5, 0);
+  line(0.18, 68, 0, 0);
+  const torus = new THREE.Mesh(new THREE.TorusGeometry(9.15, 0.1, 8, 64), white);
+  torus.rotation.x = Math.PI / 2; torus.position.y = 0.01; root.add(torus);
+  const spot = new THREE.Mesh(new THREE.CircleGeometry(0.35, 16), white);
+  spot.rotation.x = -Math.PI / 2; spot.position.y = 0.01; root.add(spot);
+  [-1, 1].forEach(s => {
+    const ox = s * 52.5;
+    line(16.5, 0.18, ox - s * 8.25, 20.16); line(16.5, 0.18, ox - s * 8.25, -20.16);
+    line(0.18, 40.32, ox - s * 16.5, 0);
+    line(5.5, 0.18, ox - s * 2.75, 9.16); line(5.5, 0.18, ox - s * 2.75, -9.16);
+    line(0.18, 18.32, ox - s * 5.5, 0);
+    const goalMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const pole = () => new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.44, 10), goalMat);
+    [[-3.66], [3.66]].forEach(([z]) => {
+      const p = pole(); p.position.set(ox, 1.22, z); p.castShadow = true; root.add(p);
+    });
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 7.32, 10), goalMat);
+    bar.rotation.x = Math.PI / 2; bar.position.set(ox, 2.44, 0); root.add(bar);
+
+    // ゴールネット
+    const netMat = new THREE.LineBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.5 });
+    const pts = [];
+    const seg = (ax,ay,az,bx,by,bz) => { pts.push(new THREE.Vector3(ax,ay,az), new THREE.Vector3(bx,by,bz)); };
+    const HW = 3.66, H = 2.44, backX = ox + s * 2.2;
+    // 後面グリッド（縦8本・横5本）
+    for (let i=0;i<=8;i++) { const z=-HW+(7.32/8)*i; seg(backX,0,z,backX,H,z); }
+    for (let j=0;j<=5;j++) { const y=(H/5)*j;        seg(backX,y,-HW,backX,y,HW); }
+    // 上面グリッド
+    for (let i=0;i<=8;i++) { const z=-HW+(7.32/8)*i; seg(ox,H,z,backX,H,z); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*2.2/3)*k; seg(x,H,-HW,x,H,HW); }
+    // 左側面（z=-HW）
+    for (let j=0;j<=5;j++) { const y=(H/5)*j;        seg(ox,y,-HW,backX,y,-HW); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*2.2/3)*k; seg(x,0,-HW,x,H,-HW); }
+    // 右側面（z=+HW）
+    for (let j=0;j<=5;j++) { const y=(H/5)*j;        seg(ox,y,HW,backX,y,HW); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*2.2/3)*k; seg(x,0,HW,x,H,HW); }
+    root.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), netMat));
+  });
+  return root;
+}
+scene.add(buildField());
+
+// ── Ball ──────────────────────────────────────────────────────────────────
+function createBallTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = '#111';
+  // 五角形パッチをサッカーボール風に配置
+  [[128,128],[64,58],[192,58],[30,162],[226,162],[96,224],[160,224]].forEach(([cx,cy]) => {
+    ctx.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+      const x = cx + Math.cos(a) * 26, y = cy + Math.sin(a) * 26;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+  });
+  return new THREE.CanvasTexture(canvas);
+}
+
+const BALL_R   = 0.13;
+const ballMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(BALL_R, 24, 24),
+  new THREE.MeshStandardMaterial({ map: createBallTexture(), roughness: 0.5, metalness: 0.05 })
+);
+ballMesh.castShadow = true;
+ballMesh.position.set(0, BALL_R, 5);
+scene.add(ballMesh);
+
+const ballVel     = new THREE.Vector3();
+const ballSpin    = new THREE.Vector3(); // 旧カーブ用（未使用）
+let   ballCurveRate = 0; // rad/s: 水平速度ベクトルの回転速度（マグナス効果）
+const BALL_GRAVITY   = 22;
+const BALL_BOUNCE    = 0.45;
+const BALL_GRND_FRIC = 0.85;  // 地面摩擦（/秒）
+const BALL_AIR_FRIC  = 0.995; // 空気抵抗（/フレーム）
+const DRIBBLE_DIST   = 1.0;   // ドリブル開始距離
+const DRIBBLE_OFFSET = 0.65;  // ボールの足元オフセット
+
+let isDribbling = false;
+
+// ── チームメート ───────────────────────────────────────────────────────────
+const teammate    = new THREE.Group();
+let teammateMixer = null;
+let teammateCurrent = null;
+let teammateState = 'support'; // 'support' | 'receive' | 'dribble'
+const TEAMMATE_SPEED     = 6.0;
+const TEAMMATE_RUN_SPEED = 10.0;
+
+// ── ボール所有権 ───────────────────────────────────────────────────────────
+let ballOwner = 'none'; // 'player' | 'teammate' | 'none'
+let playerPickupCooldown   = 0; // パス直後に自分がボールを即再拾いするのを防ぐ(秒)
+let teammatePickupCooldown = 0; // パス直後に味方がボールを即再拾いするのを防ぐ(秒)
+
+// ── プニコン（仮想スティック）─────────────────────────────────────────────
+const joystick = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+const JOY_MAX  = 55; // ドラッグの最大半径(px)
+const joyBase  = document.getElementById('joystick-base');
+const joyKnob  = document.getElementById('joystick-knob');
+
+// ── 右半分スワイプ（視線回転）─────────────────────────────────────────────
+const lookSwipe = { active: false, id: -1, prevX: 0 };
+const LOOK_SENSITIVITY = 0.003; // rad/px
+
+// カメラ視点角（Q/E/スワイプで制御。プレイヤー体の向きとは独立）
+let viewAngle = 0;
+
+// curve: 0=直線, -1=左カーブ, 1=右カーブ / power: 1.0=通常, 1.5=フル
+function kickBall(lofted = false, curve = 0, power = 1.0) {
+  const toBall = new THREE.Vector3().subVectors(ballMesh.position, player.position);
+  toBall.y = 0;
+  if (toBall.length() > 2.0 && !isDribbling) return;
+
+  const pwr = power;
+  const isCurve = curve !== 0;
+
+  if (isCurve) {
+    // カーブキック: 向きを横にずらして蹴り上げ、空中でバナナ軌道
+    const kickAngle = player.rotation.y - curve * (Math.PI / 8);
+    ballVel.x = -Math.sin(kickAngle) * 13 * pwr;
+    ballVel.y = 14;
+    ballVel.z = -Math.cos(kickAngle) * 13 * pwr;
+    ballCurveRate = curve * 0.9;
+  } else {
+    const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+    ballVel.copy(facing).multiplyScalar((lofted ? 14 : 15) * pwr);
+    ballVel.y = lofted ? 16 : 3;
+    ballCurveRate = 0;
+  }
+  ballSpin.set(0, 0, 0);
+  isDribbling = false;
+  ballOwner   = 'none';
+}
+
+// ── パス（プレイヤー → チームメート）─────────────────────────────────────
+function passToTeammate(powered = false) {
+  if (!hasTeammate || ballOwner !== 'player') return;
+  const passClip = clips['pass'] || clips['kick'];
+  if (!passClip || !mixer) return;
+  const pwr = powered ? 1.4 : 1.0;
+
+  // isPassing を使う（isKicking にしないことで ballOwner を維持）
+  isKicking = false; isPassing = false;
+  isPassing = true;
+  fadeToClip('pass' in clips ? 'pass' : 'kick', false);
+
+  setTimeout(() => {
+    isPassing = false;
+    // アニメ発動タイミングでボールを蹴り出す
+    const toTM = new THREE.Vector3().subVectors(teammate.position, ballMesh.position);
+    toTM.y = 0;
+    const dist    = toTM.length();
+    const hSpeed  = Math.max(8, Math.min(22, dist * 1.4)) * pwr; // 距離に比例した威力
+    const travelTime = Math.max(0.1, dist / hSpeed);
+    const tmFwd = new THREE.Vector3(-Math.sin(teammate.rotation.y), 0, -Math.cos(teammate.rotation.y));
+    const leadPos = teammate.position.clone().addScaledVector(tmFwd, TEAMMATE_SPEED * travelTime * 0.5);
+    const toTarget = new THREE.Vector3().subVectors(leadPos, ballMesh.position);
+    toTarget.y = 0;
+    const dir = toTarget.normalize();
+    ballVel.set(dir.x * hSpeed, Math.max(2, dist * 0.08), dir.z * hSpeed);
+    ballCurveRate = 0;
+    ballOwner            = 'none';
+    isDribbling          = false;
+    playerPickupCooldown = 1.0; // 1秒間プレイヤーがボールを拾えないようにする
+    teammateState        = 'receive';
+  }, passClip.duration * 0.55 * 1000);
+}
+
+// ── パス（チームメート → プレイヤー）─────────────────────────────────────
+function passFromTeammate() {
+  if (!hasTeammate || ballOwner !== 'teammate') return;
+  const toPlayer = new THREE.Vector3().subVectors(player.position, ballMesh.position);
+  toPlayer.y = 0;
+  const dist   = toPlayer.length();
+  const dir    = toPlayer.normalize();
+  const hSpeed  = Math.max(8, Math.min(22, dist * 1.4)); // 距離に比例した威力
+  const isLofted = dist >= 14;                            // 14m以上は浮き球
+  const vSpeed  = isLofted ? Math.max(10, dist * 0.5) : Math.max(2, dist * 0.05);
+  ballVel.set(dir.x * hSpeed, vSpeed, dir.z * hSpeed);
+  ballCurveRate          = 0;
+  ballOwner              = 'none';
+  isDribbling            = false;
+  teammatePickupCooldown = 1.0; // 1秒間味方がボールを再拾いできないようにする
+  teammateState          = 'support';
+}
+
+// ── チームメートシュート ───────────────────────────────────────────────────
+function teammateShoot() {
+  if (ballOwner !== 'teammate') return;
+  fadeToTeammateClip('kick', false);
+  const aimZ   = (Math.random() - 0.5) * 5;          // ゴール枠内のランダムな狙い点
+  const goal   = new THREE.Vector3(52.5, 1.0, aimZ);
+  const toGoal = new THREE.Vector3().subVectors(goal, ballMesh.position);
+  toGoal.y = 0;
+  const dist   = toGoal.length();
+  const dir    = toGoal.normalize();
+  const hSpeed = Math.min(24, Math.max(14, dist * 1.1));
+  const vSpeed = dist > 18 ? 7 : 4;
+  ballVel.set(dir.x * hSpeed, vSpeed, dir.z * hSpeed);
+  ballCurveRate          = 0;
+  ballOwner              = 'none';
+  isDribbling            = false;
+  teammatePickupCooldown = 1.5;
+  teammateState          = 'support';
+}
+
+// ── チームメートアニメーション ────────────────────────────────────────────
+function fadeToTeammateClip(name, loop = true) {
+  if (!teammateMixer || !clips[name]) return;
+  const next = teammateMixer.clipAction(clips[name]);
+  if (next === teammateCurrent && loop) return;
+  next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+  next.clampWhenFinished = !loop;
+  if (teammateCurrent && teammateCurrent !== next) teammateCurrent.fadeOut(0.2);
+  next.reset().fadeIn(0.2).play();
+  teammateCurrent = next;
+}
+
+// ── チームメートAI ────────────────────────────────────────────────────────
+function getTeammateTargetPos() {
+  if (ballOwner === 'teammate') {
+    const distToGoal = 52.5 - teammate.position.x;
+    const angleRatio = distToGoal > 0 ? Math.abs(teammate.position.z) / distToGoal : 0;
+    if (angleRatio > 0.65 && distToGoal > 8) {
+      // 角度が悪い(サイドに寄り過ぎ): 中央に切り込む
+      return new THREE.Vector3(
+        Math.min(48, teammate.position.x + 6),
+        0,
+        teammate.position.z * 0.35
+      );
+    }
+    // 角度OK: ゴール正面へ
+    return new THREE.Vector3(45, 0, teammate.position.z * 0.3);
+  }
+  if (teammateState === 'chase') {
+    // ルーズボールを追う
+    const bp = ballMesh.position.clone(); bp.y = 0;
+    return bp;
+  }
+  if (teammateState === 'receive') {
+    // ボールの飛軌道を先読みして走り込む
+    const spd = ballVel.length();
+    if (spd > 1.5) {
+      const approachDist = new THREE.Vector3().subVectors(teammate.position, ballMesh.position).length();
+      const t = Math.min(2, approachDist / spd);
+      const intercept = ballMesh.position.clone().addScaledVector(ballVel, t);
+      intercept.y = 0;
+      return intercept;
+    }
+    const bp = ballMesh.position.clone(); bp.y = 0;
+    return bp;
+  }
+  // サポートポジション（ボール基準・プレイヤー向き非依存）
+  const side = teammate.position.x >= 0 ? -1 : 1;
+  const pos  = new THREE.Vector3(
+    ballMesh.position.x + side * 12,
+    0,
+    ballMesh.position.z - 4
+  );
+  pos.x = Math.max(-FIELD_HALF_W + 5, Math.min(FIELD_HALF_W - 5, pos.x));
+  pos.z = Math.max(-FIELD_HALF_D + 5, Math.min(FIELD_HALF_D - 5, pos.z));
+  return pos;
+}
+
+function updateTeammate(dt) {
+  if (!hasTeammate || !gameStarted || !teammateMixer || isGoalScene) return;
+  teammateMixer.update(dt);
+
+  // 状態遷移
+  if (ballOwner === 'teammate') {
+    teammateState = 'dribble';
+  } else {
+    if (teammateState === 'dribble') teammateState = 'support';
+    if (teammateState === 'receive' && (ballOwner === 'player' || ballVel.lengthSq() < 1)) teammateState = 'support';
+    // ルーズボール（誰も持っていない）→ チェイス
+    if (ballOwner === 'none' && teammateState !== 'receive') teammateState = 'chase';
+    // ボールが誰かの手に渡ったらチェイス解除
+    if (teammateState === 'chase' && ballOwner !== 'none') teammateState = 'support';
+  }
+
+  const targetPos = getTeammateTargetPos();
+  const toTarget  = new THREE.Vector3().subVectors(targetPos, teammate.position);
+  toTarget.y = 0;
+  const dist  = toTarget.length();
+  const moving = dist > 0.4;
+
+  const chaseOrReceive = teammateState === 'chase' || teammateState === 'receive';
+  if (moving) {
+    const speed = (dist > 4 || chaseOrReceive) ? TEAMMATE_RUN_SPEED : TEAMMATE_SPEED;
+    const dir   = toTarget.clone().normalize();
+    teammate.position.addScaledVector(dir, Math.min(dist, speed * dt));
+    // なめらかに向きを変える
+    const targetRot = Math.atan2(-dir.x, -dir.z);
+    let dRot = targetRot - teammate.rotation.y;
+    while (dRot >  Math.PI) dRot -= Math.PI * 2;
+    while (dRot < -Math.PI) dRot += Math.PI * 2;
+    teammate.rotation.y += dRot * Math.min(1, 10 * dt);
+  }
+  teammate.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, teammate.position.x));
+  teammate.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, teammate.position.z));
+
+  // シュート判定: ペナルティエリア幅内(|z|<=20.16)かつ角度OK かつ十分近い
+  const PENALTY_Z = 20.16;
+  if (ballOwner === 'teammate' && teammate.position.x > 28
+      && Math.abs(teammate.position.z) <= PENALTY_Z) {
+    const distToGoal = 52.5 - teammate.position.x;
+    const angleRatio = distToGoal > 0 ? Math.abs(teammate.position.z) / distToGoal : 0;
+    if (angleRatio <= 0.65 || distToGoal <= 8) {
+      teammateShoot();
+    }
+  }
+
+  fadeToTeammateClip(moving ? 'run' : 'idle');
+}
+
+function updateBall(dt) {
+  if (!gameStarted) return;
+  if (isGoalScene) return; // ゴールシーン中は物理停止
+
+  const toPlayer   = new THREE.Vector3().subVectors(ballMesh.position, player.position);
+  toPlayer.y = 0;
+  const distPlayer = toPlayer.length();
+  const toTeam     = new THREE.Vector3().subVectors(ballMesh.position, teammate.position);
+  toTeam.y = 0;
+  const distTeam   = toTeam.length();
+
+  // ── ボール所有権の更新 ──────────────────────────────────────────────────
+  if (playerPickupCooldown   > 0) playerPickupCooldown   -= dt;
+  if (teammatePickupCooldown > 0) teammatePickupCooldown -= dt;
+
+  if (ballOwner === 'player'   && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
+  if (ballOwner === 'teammate' &&  distTeam   >= DRIBBLE_DIST * 1.5)                               ballOwner = 'none';
+  if (ballOwner === 'none') {
+    if      (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) ballOwner = 'player';
+    else if (distTeam   < DRIBBLE_DIST && !isKicking && teammatePickupCooldown <= 0) ballOwner = 'teammate';
+  }
+  // タックル中にボールが射程内 → 所有権奪取
+  const TACKLE_DIST = 1.6;
+  if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0) {
+    ballOwner = 'player';
+    teammatePickupCooldown = 0.5;
+    isTackling = false;
+  }
+  isDribbling = ballOwner === 'player';
+
+  if (isDribbling) {
+    // プレイヤードリブル
+    const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+    const target = player.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
+    target.y = BALL_R;
+    ballMesh.position.lerp(target, Math.min(1, 50 * dt));
+    ballVel.set(0, 0, 0);
+    ballCurveRate = 0;
+
+    const moving = keys.has('ArrowUp') || keys.has('KeyW') || keys.has('ArrowDown') || keys.has('KeyS')
+              || keys.has('ArrowLeft') || keys.has('KeyA') || keys.has('ArrowRight') || keys.has('KeyD');
+    if (moving) {
+      const rollDir = (keys.has('ArrowUp') || keys.has('KeyW')) ? 1 : -1;
+      const axis = new THREE.Vector3(facing.z, 0, -facing.x);
+      ballMesh.rotateOnWorldAxis(axis, rollDir * MOVE_SPEED * dt / BALL_R);
+    }
+    return;
+  }
+
+  if (ballOwner === 'teammate') {
+    // チームメートドリブル
+    const facing = new THREE.Vector3(-Math.sin(teammate.rotation.y), 0, -Math.cos(teammate.rotation.y));
+    const target = teammate.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
+    target.y = BALL_R;
+    ballMesh.position.lerp(target, Math.min(1, 50 * dt));
+    ballVel.set(0, 0, 0);
+    ballCurveRate = 0;
+    return;
+  }
+
+  // 通常物理
+  ballVel.y -= BALL_GRAVITY * dt;
+  // カーブ: 空中で水平速度ベクトルを回転させてバナナ軌道（マグナス効果）
+  if (ballCurveRate !== 0 && ballMesh.position.y > BALL_R + 0.05) {
+    const hSpd = Math.sqrt(ballVel.x * ballVel.x + ballVel.z * ballVel.z);
+    if (hSpd > 0.1) {
+      const a = Math.atan2(ballVel.x, ballVel.z) + ballCurveRate * dt;
+      ballVel.x = Math.sin(a) * hSpd;
+      ballVel.z = Math.cos(a) * hSpd;
+    }
+  }
+  ballMesh.position.addScaledVector(ballVel, dt);
+
+  if (ballMesh.position.y <= BALL_R) {
+    ballMesh.position.y = BALL_R;
+    ballVel.y = ballVel.y < -0.5 ? ballVel.y * -BALL_BOUNCE : 0;
+    ballCurveRate = 0; // 着地でカーブ終了
+    const f = Math.pow(BALL_GRND_FRIC, dt);
+    ballVel.x *= f;
+    ballVel.z *= f;
+  } else {
+    ballVel.x *= BALL_AIR_FRIC;
+    ballVel.z *= BALL_AIR_FRIC;
+  }
+
+  // ゴール判定: ゴール口内（|z|<3.66, y<2.44）ならアウト壁をスキップしてゴールへ
+  const _inGoalZ = Math.abs(ballMesh.position.z) < 3.66;
+  const _inGoalY = ballMesh.position.y < 2.44 + BALL_R;
+  if (_inGoalZ && _inGoalY) {
+    if      (ballMesh.position.x >  52.5) { scoreGoal('player'); return; }
+    else if (ballMesh.position.x < -52.5) { scoreGoal('cpu');    return; }
+  }
+  if (Math.abs(ballMesh.position.x) > FIELD_HALF_W + 1 && !(_inGoalZ && _inGoalY)) {
+    ballVel.x *= -0.6;
+    ballMesh.position.x = Math.sign(ballMesh.position.x) * (FIELD_HALF_W + 1);
+  }
+  if (Math.abs(ballMesh.position.z) > FIELD_HALF_D + 1) {
+    ballVel.z *= -0.6;
+    ballMesh.position.z = Math.sign(ballMesh.position.z) * (FIELD_HALF_D + 1);
+  }
+
+  const hspeed = Math.sqrt(ballVel.x ** 2 + ballVel.z ** 2);
+  if (hspeed > 0.01) {
+    const axis = new THREE.Vector3(ballVel.z, 0, -ballVel.x).normalize();
+    ballMesh.rotateOnWorldAxis(axis, (hspeed * dt) / BALL_R);
+  }
+
+  if (Math.abs(ballMesh.position.x) > 65 || Math.abs(ballMesh.position.z) > 45) {
+    ballMesh.position.set(0, BALL_R, 0);
+    ballVel.set(0, 0, 0);
+  }
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────
+const keys = new Set();
+let lastKeyLog = '(未押下)';
+
+window.addEventListener('keydown', e => {
+  if (e.isComposing) return; // IME変換中は無視
+  keys.add(e.code);
+  lastKeyLog = `${e.code} | gs:${gameStarted} | rep:${e.repeat}`;
+  e.preventDefault();
+
+  // ワンショット動作はkeydownで即トリガー（animate()ループを待たない）
+  if (gameStarted && !e.repeat) {
+    if (e.code === 'KeyF' || e.code === 'KeyG') {
+      const lofted = e.code === 'KeyG';
+      const power  = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 1.5 : 1.0;
+      isKicking = false;
+      if (clips['kick'] && mixer) {
+        isKicking = true;
+        fadeToClip('kick', false);
+        setTimeout(() => kickBall(lofted, 0, power), clips['kick'].duration * 0.55 * 1000);
+      }
+    }
+    if (e.code === 'KeyH' || e.code === 'KeyJ') {
+      const curveDir = e.code === 'KeyH' ? -1 : 1;
+      const power    = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 1.5 : 1.0;
+      isKicking = false;
+      if (clips['kick'] && mixer) {
+        isKicking = true;
+        fadeToClip('kick', false);
+        setTimeout(() => kickBall(false, curveDir, power), clips['kick'].duration * 0.55 * 1000);
+      }
+    }
+    if (e.code === 'KeyT' && ballOwner !== 'player' && !isTackling) {
+      // タックル（ボール非所持時のみ）
+      if (clips['tackle'] && mixer) {
+        isTackling = true;
+        fadeToClip('tackle', false);
+      }
+    }
+    if (e.code === 'KeyZ' && isDribbling && !isSpinning) {
+      // スピン（ドリブル中のみ）
+      if (clips['spin'] && mixer) {
+        isSpinning = true;
+        fadeToClip('spin', false);
+      }
+    }
+    if (e.code === 'KeyR' && !isPassing) {
+      const powered = keys.has('ShiftLeft') || keys.has('ShiftRight');
+      if (ballOwner === 'player')        passToTeammate(powered);
+      else if (ballOwner === 'teammate') passFromTeammate();
+    }
+  }
+}, { capture: true }); // captureでブラウザより先にキーを受け取る
+
+window.addEventListener('keyup', e => {
+  if (e.isComposing) return;
+  keys.delete(e.code);
+}, { capture: true });
+
+// ── Character & Animations ────────────────────────────────────────────────
+const player  = new THREE.Group();   // 移動・回転はこのグループで制御
+scene.add(player);
+
+let character = null;
+let mixer     = null;
+const clips   = {};
+let current   = null;
+let isKicking   = false;
+let isPassing   = false;
+let isTackling  = false;
+let isSpinning  = false;
+let groundY     = 0;
+let hasTeammate = true;
+let playerScore = 0;
+let cpuScore    = 0;
+let isGoalScene = false;
+
+// Mixamoのhipボーン位置トラックを除去してモーション間のジャンプを防ぐ
+function stripRootMotion(clip) {
+  clip.tracks = clip.tracks.filter(
+    t => !(t.name.toLowerCase().includes('hips') && t.name.endsWith('.position'))
+  );
+  return clip;
+}
+
+function fadeToClip(name, loop = true) {
+  if (!mixer || !clips[name]) return;
+  const next = mixer.clipAction(clips[name]);
+  // ループアニメは同じアクションなら何もしない。ワンショットは必ず再トリガー
+  if (next === current && loop) return;
+  next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+  next.clampWhenFinished = !loop;
+  if (current && current !== next) current.fadeOut(0.2);
+  next.reset().fadeIn(0.2).play();
+  current = next;
+}
+
+// ── Loading ───────────────────────────────────────────────────────────────
+const loadingEl  = document.getElementById('loading');
+const loadingBar = document.getElementById('loading-bar');
+const loadingMsg = document.getElementById('loading-msg');
+const loadingErr = document.getElementById('loading-error');
+
+// ── Score / Goal ──────────────────────────────────────────────────────────
+const scoreDisplay  = document.getElementById('score-display');
+const scorePlayerEl = document.getElementById('score-player');
+const scoreCpuEl    = document.getElementById('score-cpu');
+const goalFlashEl   = document.getElementById('goal-flash');
+const goalSubText   = document.getElementById('goal-sub-text');
+
+function updateScoreDisplay() {
+  if (scorePlayerEl) scorePlayerEl.textContent = playerScore;
+  if (scoreCpuEl)    scoreCpuEl.textContent    = cpuScore;
+}
+
+function showGoalFlash(scorer) {
+  if (!goalFlashEl) return;
+  const isConcede = scorer === 'cpu';
+  const word = goalFlashEl.querySelector('.goal-word');
+  const sub  = goalFlashEl.querySelector('.goal-sub');
+  word.textContent       = isConcede ? 'SCORED...' : 'GOAL!';
+  goalSubText.textContent = isConcede ? '失　点' : 'PLAYER  SCORES!';
+  goalFlashEl.classList.toggle('conceded', isConcede);
+  // アニメ再トリガー（連続ゴール対応）
+  word.style.animation        = 'none';
+  sub.style.animation         = 'none';
+  goalFlashEl.style.animation = 'none';
+  goalFlashEl.style.display   = 'flex';
+  requestAnimationFrame(() => {
+    word.style.animation        = '';
+    sub.style.animation         = '';
+    goalFlashEl.style.animation = '';
+  });
+}
+
+function resetAfterGoal() {
+  ballMesh.position.set(0, BALL_R, 0);
+  ballVel.set(0, 0, 0);
+  ballCurveRate = 0;
+  ballOwner = 'none';
+  isDribbling = false;
+  isKicking = isPassing = isTackling = isSpinning = false;
+  playerPickupCooldown = teammatePickupCooldown = 0;
+
+  player.position.set(0, groundY, 0);
+  player.rotation.y = 0;
+
+  if (hasTeammate) {
+    teammate.position.set(10, groundY, 5);
+    teammate.rotation.y = 0;
+    if (teammateMixer) { teammateMixer.stopAllAction(); teammateCurrent = null; }
+    fadeToTeammateClip('idle');
+  }
+
+  if (mixer) { mixer.stopAllAction(); current = null; }
+  fadeToClip('idle');
+
+  if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
+}
+
+function scoreGoal(scorer) {
+  if (isGoalScene) return;
+  isGoalScene = true;
+  if (scorer === 'player') playerScore++; else cpuScore++;
+  // ボールをゴール内に固定
+  ballMesh.position.set(scorer === 'player' ? 53.2 : -53.2, BALL_R, 0);
+  ballVel.set(0, 0, 0);
+  ballOwner = 'none';
+  isDribbling = false;
+  updateScoreDisplay();
+  showGoalFlash(scorer);
+  setTimeout(() => { resetAfterGoal(); isGoalScene = false; }, 2500);
+}
+
+const loader = new FBXLoader();
+
+const ANIM_FILES = [
+  ['idle',    './animations/idle.fbx'],
+  ['walk',    './animations/walk.fbx'],
+  ['run',     './animations/run.fbx'],
+  ['sprint',  './animations/sprint.fbx'],
+  ['kick',    './animations/kick.fbx'],
+  ['dribble', './animations/Dribble.fbx'],
+  ['pass',    './animations/Pass.fbx'],
+  ['tackle',  './animations/Tackle.fbx'],
+  ['spin',    './animations/Spin.fbx'],
+];
+const CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ
+let coreReady = 0;
+let gameStarted = false;
+
+function onCoreLoaded() {
+  coreReady++;
+  const pct = Math.round((coreReady / CORE_TOTAL) * 100);
+  loadingBar.style.width = pct + '%';
+  if (coreReady === CORE_TOTAL) {
+    loadingEl.style.display = 'none';
+    if (scoreDisplay) scoreDisplay.style.display = 'flex';
+    gameStarted = true;
+    fadeToClip('idle');
+    if (hasTeammate) fadeToTeammateClip('idle');
+  }
+}
+
+// ゲーム開始（lobby.jsからimportされる）
+export function startGame(config) {
+  hasTeammate = config.withTeammate;
+
+  // キャラクター
+  loader.load(
+    config.charFbx,
+    fbx => {
+      character = fbx;
+      character.scale.setScalar(0.01);
+      character.rotation.y = Math.PI;
+      character.traverse(c => {
+        if (c.isMesh) {
+          c.castShadow = true;
+          c.receiveShadow = true;
+          const mats = Array.isArray(c.material) ? c.material : [c.material];
+          mats.forEach(m => { if (m.map) m.map.colorSpace = THREE.SRGBColorSpace; });
+        }
+      });
+      player.add(character);
+      player.updateMatrixWorld(true);
+      const meshBox = new THREE.Box3();
+      character.traverse(c => {
+        if (c.isMesh && c.geometry) {
+          c.geometry.computeBoundingBox();
+          const b = c.geometry.boundingBox.clone().applyMatrix4(c.matrixWorld);
+          meshBox.union(b);
+        }
+      });
+      if (!meshBox.isEmpty() && isFinite(meshBox.min.y) && meshBox.min.y < -0.01) {
+        player.position.y -= meshBox.min.y;
+      }
+      groundY = player.position.y;
+      mixer = new THREE.AnimationMixer(character);
+      mixer.addEventListener('finished', e => {
+        if (clips['kick']    && e.action === mixer.clipAction(clips['kick']))    isKicking  = false;
+        if (clips['pass']    && e.action === mixer.clipAction(clips['pass']))    isPassing  = false;
+        if (clips['tackle']  && e.action === mixer.clipAction(clips['tackle']))  isTackling = false;
+        if (clips['spin']    && e.action === mixer.clipAction(clips['spin']))    isSpinning = false;
+      });
+
+      if (hasTeammate) {
+        const tmFbx = SkeletonUtils.clone(fbx);
+        tmFbx.scale.setScalar(0.01);
+        tmFbx.rotation.y = Math.PI;
+        tmFbx.traverse(c => {
+          if (c.isMesh) {
+            c.castShadow = true;
+            c.receiveShadow = true;
+            c.material = Array.isArray(c.material)
+              ? c.material.map(m => { const mc = m.clone(); mc.color.set(0x88bbff); return mc; })
+              : (() => { const mc = c.material.clone(); mc.color.set(0x88bbff); return mc; })();
+          }
+        });
+        teammate.add(tmFbx);
+        teammate.position.set(10, player.position.y, 5);
+        scene.add(teammate);
+        teammateMixer = new THREE.AnimationMixer(tmFbx);
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(0.12, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0x2266ff })
+        );
+        marker.position.set(0, 2.05, 0);
+        teammate.add(marker);
+      }
+
+      onCoreLoaded();
+    },
+    xhr => {
+      const mb = (xhr.loaded / 1024 / 1024).toFixed(1);
+      loadingMsg.textContent = `キャラ読み込み中... ${mb}MB`;
+    },
+    err => {
+      console.error(err);
+      loadingErr.textContent = `読み込みエラー: ${err?.message || 'ファイルが見つかりません'} — start-server.bat で起動してください`;
+    }
+  );
+
+  // 全アニメを並列ロード
+  ANIM_FILES.forEach(([name, path]) => {
+    loader.load(path, fbx => {
+      if (fbx.animations.length) {
+        const clip = stripRootMotion(fbx.animations[0]);
+        clip.name = name;
+        clips[name] = clip;
+      } else {
+        console.warn(`No animations found in ${path}`);
+      }
+      onCoreLoaded();
+    }, undefined, err => {
+      console.error(`Failed to load ${path}:`, err);
+      onCoreLoaded();
+    });
+  });
+}
+
+// ── Character Control ─────────────────────────────────────────────────────
+const MOVE_SPEED   = 8;
+const RUN_SPEED    = 14;
+const TURN_SPEED   = 1.2;
+const FIELD_HALF_W = 51;
+const FIELD_HALF_D = 33;
+
+const smoothCamTarget = new THREE.Vector3(0, 1, 0);
+
+function getDesiredAnim() {
+  if (isKicking || isPassing || isTackling) return null;
+  if (isSpinning && isDribbling) return 'spin';
+  const fwd    = keys.has('KeyW') || keys.has('ArrowUp');
+  const bwd    = keys.has('KeyS') || keys.has('ArrowDown');
+  const strafe = keys.has('KeyA') || keys.has('ArrowLeft') || keys.has('KeyD') || keys.has('ArrowRight');
+  const shift  = keys.has('ShiftLeft') || keys.has('ShiftRight');
+  const joyFwd  = joystick.active && joystick.dy < -0.1;
+  const joyBwd  = joystick.active && joystick.dy >  0.1;
+  const joyStrf = joystick.active && Math.abs(joystick.dx) > 0.1;
+  const moving  = fwd || bwd || strafe || joyFwd || joyBwd || joyStrf;
+  if (isDribbling && moving && clips['dribble']) return 'dribble';
+  if (moving) return ((fwd || joyFwd) && shift && clips['sprint']) ? 'sprint' : (clips['run'] ? 'run' : 'idle');
+  return 'idle';
+}
+
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (mixer) mixer.update(dt);
+  updateBall(dt);
+  updateTeammate(dt);
+
+  if (gameStarted) {
+  if (!isGoalScene) {
+    const anim = getDesiredAnim();
+    if (anim) fadeToClip(anim);
+
+    if (!isKicking && !isPassing && !isTackling && !isSpinning) {
+      // 視線回転: Q/E キー
+      if (keys.has('KeyQ')) viewAngle += TURN_SPEED * dt;
+      if (keys.has('KeyE')) viewAngle -= TURN_SPEED * dt;
+
+      const fwd      = keys.has('KeyW') || keys.has('ArrowUp');
+      const bwd      = keys.has('KeyS') || keys.has('ArrowDown');
+      const strafeLt = keys.has('KeyA') || keys.has('ArrowLeft');
+      const strafeRt = keys.has('KeyD') || keys.has('ArrowRight');
+      const shift    = keys.has('ShiftLeft') || keys.has('ShiftRight');
+
+      // 移動方向はカメラ視点角基準
+      const camDir   = new THREE.Vector3(-Math.sin(viewAngle), 0, -Math.cos(viewAngle));
+      const camRight = new THREE.Vector3( Math.cos(viewAngle), 0, -Math.sin(viewAngle));
+
+      // Shift+左右 = 平行移動 / 左右のみ = 向きも変える（後退中は向き変更なし）
+      const moveVec = new THREE.Vector3();
+      let wantTurn  = false;
+      if (fwd)               { moveVec.addScaledVector(camDir,    1); wantTurn = true; }
+      if (bwd)               { moveVec.addScaledVector(camDir,   -1); }
+      if (strafeLt && shift) { moveVec.addScaledVector(camRight, -1); }
+      if (strafeRt && shift) { moveVec.addScaledVector(camRight,  1); }
+      if (strafeLt && !shift){ moveVec.addScaledVector(camRight, -1); if (!bwd) wantTurn = true; }
+      if (strafeRt && !shift){ moveVec.addScaledVector(camRight,  1); if (!bwd) wantTurn = true; }
+
+      // プニコン入力（shift+横のみ = 平行移動: 向き・視点変更しない）
+      const joyShift = shift && joystick.active
+        && Math.abs(joystick.dx) > 0.05
+        && Math.abs(joystick.dy) <= 0.05;
+      if (joystick.active) {
+        if (Math.abs(joystick.dy) > 0.05) { moveVec.addScaledVector(camDir,   -joystick.dy); wantTurn = true; }
+        if (Math.abs(joystick.dx) > 0.05) { moveVec.addScaledVector(camRight,  joystick.dx); if (!joyShift) wantTurn = true; }
+      }
+
+      if (moveVec.lengthSq() > 0.001) {
+        moveVec.normalize();
+        const speed = ((fwd || bwd) && shift) ? RUN_SPEED : MOVE_SPEED;
+        player.position.addScaledVector(moveVec, speed * dt);
+
+        if (wantTurn) {
+          const targetAngle = Math.atan2(-moveVec.x, -moveVec.z);
+          let diff = targetAngle - player.rotation.y;
+          while (diff >  Math.PI) diff -= 2 * Math.PI;
+          while (diff < -Math.PI) diff += 2 * Math.PI;
+          player.rotation.y += diff * Math.min(1, 12 * dt);
+        }
+      }
+
+      player.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, player.position.x));
+      player.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, player.position.z));
+
+      // viewAngle をプレイヤーの向きへゆっくり遅延追従（Q/E・スワイプ中、Shift横移動中は追従しない）
+      const shiftStrafeOnly = joyShift
+        || (shift && (strafeLt || strafeRt) && !fwd && !bwd && !joystick.active);
+      if (!shiftStrafeOnly && !keys.has('KeyQ') && !keys.has('KeyE') && !lookSwipe.active) {
+        let camDiff = player.rotation.y - viewAngle;
+        while (camDiff >  Math.PI) camDiff -= 2 * Math.PI;
+        while (camDiff < -Math.PI) camDiff += 2 * Math.PI;
+        viewAngle += camDiff * Math.min(1, 1.5 * dt); // ゆっくり追従（約1〜2秒で追いつく）
+      }
+    }
+
+    // タックル/スピン中は向いてる方向に自動前進
+    if (isTackling || isSpinning) {
+      const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+      const speed  = isTackling ? MOVE_SPEED * 1.3 : MOVE_SPEED;
+      player.position.addScaledVector(facing, speed * dt);
+      player.position.y = groundY; // 浮き防止
+      player.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, player.position.x));
+      player.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, player.position.z));
+    }
+  } // end !isGoalScene
+
+    // カメラ追従: ターゲット位置をスムーズに追い、そこから固定オフセット分で配置
+    // （位置を直接 lerp するとカメラがプレイヤーに近づくズームが起きるため避ける）
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, viewAngle, 0));
+    const camOffset   = new THREE.Vector3(0, 8, 16).applyQuaternion(q);
+    const idealTarget = player.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+    const t = Math.min(1, 7 * dt);
+    smoothCamTarget.lerp(idealTarget, t);
+    camera.position.copy(smoothCamTarget).add(camOffset);
+    camera.lookAt(smoothCamTarget);
+  } // end gameStarted
+
+  if (window._updateMobileButtons) window._updateMobileButtons();
+  renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ブラウザのピンチ・スクロールズームを無効化
+document.addEventListener('wheel', e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturestart',  e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
+
+// ── タッチ操作 ────────────────────────────────────────────────────────────
+
+// ▼ プニコン（仮想スティック）— 画面左半分のタッチで起動
+// ▼ 右半分スワイプ — 視線回転
+document.addEventListener('touchstart', e => {
+  // ロビー表示中はゲーム用タッチ処理を無効化
+  if (document.getElementById('lobby')?.style?.display !== 'none') return;
+  for (const t of e.changedTouches) {
+    const isBtn = t.target.closest?.('.touch-btn');
+    if (t.clientX < window.innerWidth * 0.5 && !joystick.active) {
+      e.preventDefault();
+      joystick.active = true;
+      joystick.id = t.identifier;
+      joystick.ox = t.clientX;
+      joystick.oy = t.clientY;
+      joystick.dx = 0;
+      joystick.dy = 0;
+      joyBase.style.display = 'block';
+      joyBase.style.left = t.clientX + 'px';
+      joyBase.style.top  = t.clientY + 'px';
+      joyKnob.style.transform = 'translate(-50%,-50%)';
+    } else if (!isBtn && t.clientX >= window.innerWidth * 0.5 && !lookSwipe.active) {
+      // ボタン以外の右半分タッチ → 視線回転スワイプ開始
+      e.preventDefault();
+      lookSwipe.active = true;
+      lookSwipe.id = t.identifier;
+      lookSwipe.prevX = t.clientX;
+    }
+  }
+}, { passive: false });
+
+document.addEventListener('touchmove', e => {
+  if (document.getElementById('lobby')?.style?.display !== 'none') return;
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === joystick.id) {
+      const ddx = t.clientX - joystick.ox;
+      const ddy = t.clientY - joystick.oy;
+      const len = Math.sqrt(ddx * ddx + ddy * ddy);
+      const cl  = Math.min(len, JOY_MAX);
+      joystick.dx = (len > 0 ? ddx / len : 0) * cl / JOY_MAX;
+      joystick.dy = (len > 0 ? ddy / len : 0) * cl / JOY_MAX;
+      joyKnob.style.transform =
+        `translate(calc(-50% + ${joystick.dx * JOY_MAX}px), calc(-50% + ${joystick.dy * JOY_MAX}px))`;
+    } else if (t.identifier === lookSwipe.id) {
+      // 右スワイプで視線回転（viewAngle を変える。プレイヤー体は変えない）
+      const dx = t.clientX - lookSwipe.prevX;
+      lookSwipe.prevX = t.clientX;
+      viewAngle -= dx * LOOK_SENSITIVITY;
+    }
+  }
+}, { passive: false });
+
+function releaseTouch(id) {
+  if (id === joystick.id) {
+    joystick.active = false;
+    joystick.id = -1;
+    joystick.dx = 0;
+    joystick.dy = 0;
+    joyBase.style.display = 'none';
+  }
+  if (id === lookSwipe.id) {
+    lookSwipe.active = false;
+    lookSwipe.id = -1;
+  }
+}
+document.addEventListener('touchend',    e => { for (const t of e.changedTouches) releaseTouch(t.identifier); });
+document.addEventListener('touchcancel', e => { for (const t of e.changedTouches) releaseTouch(t.identifier); });
+
+// ▼ アクションボタン（右半分）
+(function setupActionBtns() {
+  // スプリントボタン（押してる間 Shift 扱い）
+  const sprintBtn = document.getElementById('btn-sprint');
+  if (sprintBtn) {
+    sprintBtn.addEventListener('touchstart', e => { e.preventDefault(); keys.add('ShiftLeft'); },   { passive: false });
+    sprintBtn.addEventListener('touchend',   e => { e.preventDefault(); keys.delete('ShiftLeft'); }, { passive: false });
+    sprintBtn.addEventListener('touchcancel',() => keys.delete('ShiftLeft'));
+  }
+
+  // キックボタン（ジョイスティック傾き量でpower決定: 弱押し=弱シュート, フル=強シュート）
+  function setupKickBtn(id, lofted, curve) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (gameStarted && clips['kick'] && mixer) {
+        const joyMag = joystick.active
+          ? Math.min(1, Math.sqrt(joystick.dx ** 2 + joystick.dy ** 2))
+          : 1.0;
+        const power = 0.6 + 0.9 * joyMag; // 0.6(最弱)〜1.5(最強)
+        isKicking = false;
+        isKicking = true;
+        fadeToClip('kick', false);
+        setTimeout(() => kickBall(lofted, curve, power), clips['kick'].duration * 0.55 * 1000);
+      }
+    }, { passive: false });
+  }
+  setupKickBtn('btn-kick',        false,  0);
+  setupKickBtn('btn-loft',        true,   0);
+  setupKickBtn('btn-curve-left',  false, -1);
+  setupKickBtn('btn-curve-right', false,  1);
+
+  // パスボタン
+  const passBtn = document.getElementById('btn-pass');
+  if (passBtn) {
+    passBtn.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (!gameStarted || isPassing) return;
+      const powered = keys.has('ShiftLeft') || keys.has('ShiftRight');
+      if (ballOwner === 'player')        passToTeammate(powered);
+      else if (ballOwner === 'teammate') passFromTeammate();
+    }, { passive: false });
+  }
+
+  // タックルボタン（ボール非所持時のみ有効）
+  const tackleBtn = document.getElementById('btn-tackle');
+  if (tackleBtn) {
+    tackleBtn.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (gameStarted && ballOwner !== 'player' && !isTackling && clips['tackle'] && mixer) {
+        isTackling = true;
+        fadeToClip('tackle', false);
+      }
+    }, { passive: false });
+  }
+
+  // スピンボタン（ドリブル中のみ有効）
+  const spinBtn = document.getElementById('btn-spin');
+  if (spinBtn) {
+    spinBtn.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (gameStarted && isDribbling && !isSpinning && clips['spin'] && mixer) {
+        isSpinning = true;
+        fadeToClip('spin', false);
+      }
+    }, { passive: false });
+  }
+
+  // ボール所持状態に応じてボタン表示切替
+  function updateMobileButtons() {
+    const hasBall = ballOwner === 'player';
+    ['btn-kick', 'btn-loft', 'btn-curve-left', 'btn-curve-right'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = hasBall ? '' : 'none';
+    });
+    if (tackleBtn) tackleBtn.style.display = hasBall ? 'none' : '';
+    if (spinBtn)   spinBtn.style.display   = hasBall ? '' : 'none';
+    if (passBtn)   passBtn.style.display   = hasTeammate ? '' : 'none';
+  }
+  // animate() から呼べるようにグローバル化
+  window._updateMobileButtons = updateMobileButtons;
+})();
+
+animate();

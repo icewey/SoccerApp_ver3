@@ -1,0 +1,10 @@
+{
+  "server": {
+    "host": "localhost",
+    "port": 8080
+  },
+  "app": {
+    "entryPoint": "index.html",
+    "title": "Soccer Game 3D"
+  }
+}

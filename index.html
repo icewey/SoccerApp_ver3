@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Soccer Game - 3D</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+    canvas { display: block; }
+
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: none; /* ロビーが表示するまで非表示 */
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.88);
+      color: #fff;
+      z-index: 100;
+    }
+    #loading h1 { font-size: 2rem; margin-bottom: 1rem; }
+    #loading-bar-wrap {
+      width: 300px;
+      height: 8px;
+      background: #333;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 1rem;
+    }
+    #loading-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #4caf50, #8bc34a);
+      border-radius: 4px;
+      transition: width 0.2s;
+    }
+    #loading-msg { font-size: 0.9rem; color: #aaa; }
+    #loading-error { color: #ff6b6b; font-size: 0.85rem; margin-top: 1rem; max-width: 360px; text-align: center; }
+
+    #ui {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.5);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      display: flex;
+      gap: 20px;
+      pointer-events: none;
+    }
+    #ui span { opacity: 0.8; }
+
+    #info {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      color: rgba(255,255,255,0.7);
+      font-size: 0.75rem;
+    }
+
+    /* ── タッチ操作UI（スマホのみ表示） ── */
+    #touch-controls {
+      display: none;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      height: 320px;
+      pointer-events: none;
+      z-index: 50;
+    }
+    @media (pointer: coarse) {
+      #touch-controls { display: block; }
+      #ui { display: none; }
+    }
+
+    .touch-btn {
+      position: absolute;
+      pointer-events: all;
+      background: rgba(255,255,255,0.18);
+      border: 2px solid rgba(255,255,255,0.4);
+      border-radius: 50%;
+      color: #fff;
+      font-size: 1.0rem;
+      display: flex; align-items: center; justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+    .touch-btn:active { background: rgba(255,255,255,0.38); }
+
+    /* 右：アクションボタン（全て右半分に配置） */
+    #btn-pass        { width:64px;height:64px; bottom:240px; right:52px;  background:rgba(0,200,80,0.35);  }
+    #btn-spin        { width:60px;height:60px; bottom:240px; right:10px;  background:rgba(255,220,0,0.35); }
+    #btn-kick        { width:64px;height:64px; bottom:165px; right:90px;  background:rgba(255,80,80,0.3); }
+    #btn-loft        { width:64px;height:64px; bottom:165px; right:15px;  background:rgba(255,140,0,0.3); }
+    #btn-curve-left  { width:60px;height:60px; bottom:90px;  right:90px;  background:rgba(140,80,255,0.3); }
+    #btn-curve-right { width:60px;height:60px; bottom:90px;  right:15px;  background:rgba(80,200,255,0.3); }
+    #btn-tackle      { width:72px;height:72px; bottom:120px; right:45px;  background:rgba(255,60,60,0.45); }
+    #btn-sprint      { width:56px;height:56px; bottom:20px;  right:15px;  background:rgba(255,200,0,0.3); border-radius:12px; }
+
+    /* プニコン */
+    #joystick-base {
+      display: none;
+      position: fixed;
+      width: 120px; height: 120px;
+      background: rgba(255,255,255,0.10);
+      border: 2px solid rgba(255,255,255,0.35);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 60;
+      transform: translate(-50%, -50%);
+    }
+    #joystick-knob {
+      position: absolute;
+      width: 52px; height: 52px;
+      background: rgba(255,255,255,0.45);
+      border-radius: 50%;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    /* ══════════════════════════════════════
+       LOBBY
+       ══════════════════════════════════════ */
+    #lobby {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: #080812;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      overflow: hidden;
+      transition: opacity 0.38s ease;
+    }
+
+    /* radial gradient bg */
+    #lobby::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 90% 55% at 50% -5%, rgba(0,110,255,0.22) 0%, transparent 65%),
+        radial-gradient(ellipse 55% 45% at 88% 105%, rgba(200,0,90,0.14) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    /* hex grid */
+    #lobby::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg width='56' height='64' viewBox='0 0 56 64' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M28 2 L54 17 L54 47 L28 62 L2 47 L2 17 Z' fill='none' stroke='rgba(255,255,255,0.028)' stroke-width='1'/%3E%3C/svg%3E");
+      background-size: 56px 64px;
+      pointer-events: none;
+    }
+
+    /* ── header ── */
+    .lb-header {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      padding: 22px 36px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .lb-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .lb-ball {
+      font-size: 2rem;
+      animation: lb-float 3s ease-in-out infinite;
+      filter: drop-shadow(0 0 10px rgba(255,255,255,0.35));
+    }
+    @keyframes lb-float {
+      0%,100% { transform: translateY(0) rotate(-6deg); }
+      50%      { transform: translateY(-7px) rotate(6deg); }
+    }
+
+    .lb-title {
+      font-size: 1.45rem;
+      font-weight: 900;
+      letter-spacing: 5px;
+      color: #fff;
+      text-transform: uppercase;
+    }
+
+    .lb-ver {
+      font-size: 0.62rem;
+      color: rgba(255,255,255,0.28);
+      letter-spacing: 2px;
+    }
+
+    /* ── body ── */
+    .lb-body {
+      position: relative;
+      z-index: 1;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      width: 100%;
+      padding: 0 20px 36px;
+    }
+
+    .lb-section-label {
+      font-size: 0.65rem;
+      letter-spacing: 7px;
+      color: rgba(255,255,255,0.35);
+      text-transform: uppercase;
+    }
+
+    /* ── character row ── */
+    #lb-row {
+      display: flex;
+      gap: 14px;
+      align-items: flex-end;
+      justify-content: center;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding: 12px 8px 24px;
+      width: 100%;
+      max-width: 1020px;
+      scrollbar-width: none;
+    }
+    #lb-row::-webkit-scrollbar { display: none; }
+
+    .lb-card {
+      flex-shrink: 0;
+      position: relative;
+      width: 110px;
+      height: 162px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1.5px solid rgba(255,255,255,0.09);
+      background: rgba(255,255,255,0.03);
+      cursor: pointer;
+      transition:
+        width  0.38s cubic-bezier(0.34,1.56,0.64,1),
+        height 0.38s cubic-bezier(0.34,1.56,0.64,1),
+        border-color 0.25s,
+        box-shadow   0.25s;
+    }
+
+    .lb-card:hover:not(.lb-locked) {
+      border-color: rgba(255,255,255,0.22);
+    }
+
+    .lb-card.lb-selected {
+      width: 172px;
+      height: 248px;
+      border-color: var(--cc, #00d4ff);
+      box-shadow:
+        0 0 22px var(--cc, #00d4ff),
+        0 0 64px color-mix(in srgb, var(--cc,#00d4ff) 28%, transparent),
+        inset 0 0 18px rgba(0,0,0,0.25);
+    }
+
+    .lb-card.lb-locked {
+      cursor: default;
+      filter: grayscale(0.75) brightness(0.55);
+    }
+
+    .lb-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: top center;
+      display: block;
+    }
+
+    /* scanlines on selected */
+    .lb-card.lb-selected::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0,0,0,0.06) 3px,
+        rgba(0,0,0,0.06) 4px
+      );
+      pointer-events: none;
+    }
+
+    /* colour bar on top of selected */
+    .lb-card.lb-selected::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--cc, #00d4ff);
+      box-shadow: 0 0 10px var(--cc, #00d4ff);
+      z-index: 2;
+    }
+
+    .lb-overlay {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 32px 8px 8px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.88));
+    }
+
+    .lb-num {
+      font-size: 1.05rem;
+      font-weight: 900;
+      color: var(--cc, #fff);
+      text-align: center;
+      line-height: 1;
+      text-shadow: 0 0 8px var(--cc, transparent);
+    }
+    .lb-card.lb-selected .lb-num { font-size: 1.5rem; }
+
+    .lb-name {
+      font-size: 0.52rem;
+      color: rgba(255,255,255,0.7);
+      text-align: center;
+      letter-spacing: 1px;
+      margin-top: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .lb-card.lb-selected .lb-name { font-size: 0.68rem; color: #fff; }
+
+    .lb-soon {
+      position: absolute;
+      top: 8px; right: 8px;
+      background: rgba(0,0,0,0.65);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 4px;
+      font-size: 0.52rem;
+      letter-spacing: 1.5px;
+      color: rgba(255,255,255,0.45);
+      padding: 3px 6px;
+    }
+
+    /* ── teammate toggle ── */
+    .lb-tm-row {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .lb-tm-label {
+      font-size: 0.62rem;
+      letter-spacing: 5px;
+      color: rgba(255,255,255,0.32);
+      text-transform: uppercase;
+    }
+
+    .lb-tm-toggle {
+      display: flex;
+      background: rgba(255,255,255,0.05);
+      border-radius: 9px;
+      padding: 3px;
+      gap: 3px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .lb-tm-btn {
+      background: transparent;
+      border: none;
+      color: rgba(255,255,255,0.38);
+      padding: 8px 22px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      letter-spacing: 2px;
+      transition: all 0.18s;
+      font-family: inherit;
+    }
+    .lb-tm-btn.active {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+    }
+    .lb-tm-btn:hover:not(.active) { color: rgba(255,255,255,0.65); }
+
+    /* ── kick off button ── */
+    #lb-kickoff {
+      position: relative;
+      background: transparent;
+      border: 2px solid #00d4ff;
+      color: #00d4ff;
+      padding: 15px 62px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 9px;
+      text-transform: uppercase;
+      cursor: pointer;
+      border-radius: 3px;
+      overflow: hidden;
+      transition: all 0.28s;
+      font-family: inherit;
+    }
+
+    #lb-kickoff::before {
+      content: '';
+      position: absolute;
+      top: 0; left: -120%; bottom: 0; width: 60%;
+      background: linear-gradient(90deg, transparent, rgba(0,212,255,0.18), transparent);
+      transition: left 0.5s;
+    }
+
+    #lb-kickoff:hover {
+      background: rgba(0,212,255,0.07);
+      box-shadow: 0 0 32px rgba(0,212,255,0.32), inset 0 0 24px rgba(0,212,255,0.04);
+      transform: translateY(-2px);
+    }
+    #lb-kickoff:hover::before { left: 160%; }
+    #lb-kickoff:active { transform: translateY(0); }
+
+    /* ── keyboard hint ── */
+    .lb-hint {
+      position: absolute;
+      bottom: 10px;
+      font-size: 0.56rem;
+      letter-spacing: 2px;
+      color: rgba(255,255,255,0.18);
+    }
+
+    /* ── スコア表示（1行レイアウト: YOU 0 – 0 CPU） ── */
+    #score-display {
+      position: fixed;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 90;
+      display: none;
+      flex-direction: row;
+      align-items: center;
+      gap: 10px;
+      background: rgba(0,0,0,0.62);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 10px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 8px 20px;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    .score-label {
+      font-size: 0.55rem;
+      letter-spacing: 3px;
+      color: rgba(255,255,255,0.38);
+      text-transform: uppercase;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .score-num {
+      font-size: 2.0rem;
+      font-weight: 900;
+      color: #fff;
+      line-height: 1;
+      min-width: 1.2rem;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 20px rgba(255,255,255,0.3);
+    }
+    .score-dash {
+      font-size: 1.1rem;
+      color: rgba(255,255,255,0.2);
+      line-height: 1;
+    }
+
+    /* ── ゴールフラッシュ ── */
+    #goal-flash {
+      position: fixed;
+      inset: 0;
+      z-index: 150;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      background: radial-gradient(ellipse 80% 50% at 50% 50%, rgba(255,210,0,0.13) 0%, transparent 70%);
+    }
+    .goal-word {
+      font-size: clamp(4.5rem, 14vw, 9rem);
+      font-weight: 900;
+      letter-spacing: 14px;
+      color: #fff;
+      text-shadow:
+        0 0 40px rgba(255,200,0,0.9),
+        0 0 80px rgba(255,120,0,0.55),
+        2px 2px 0 rgba(0,0,0,0.5);
+      animation: goal-pop 0.45s cubic-bezier(0.34,1.56,0.64,1) both;
+    }
+    .goal-sub {
+      font-size: 1.0rem;
+      letter-spacing: 6px;
+      color: rgba(255,255,255,0.72);
+      margin-top: 12px;
+      text-transform: uppercase;
+      animation: goal-fade 0.5s 0.2s ease-out both;
+    }
+    @keyframes goal-pop {
+      from { transform: scale(0.25) rotate(-5deg); opacity: 0; }
+      to   { transform: scale(1) rotate(0deg);     opacity: 1; }
+    }
+    @keyframes goal-fade {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── 失点演出（暗い・重い・画面揺れ） ── */
+    #goal-flash.conceded {
+      background: radial-gradient(ellipse 80% 50% at 50% 50%, rgba(160,0,0,0.22) 0%, transparent 70%);
+      animation: screen-shake 0.55s 0.08s ease-out both;
+    }
+    #goal-flash.conceded .goal-word {
+      color: #ff7070;
+      letter-spacing: 10px;
+      text-shadow:
+        0 0 32px rgba(220,0,0,0.9),
+        0 0 72px rgba(160,0,0,0.5),
+        2px 2px 0 rgba(0,0,0,0.7);
+      animation: concede-drop 0.48s ease-out both;
+    }
+    #goal-flash.conceded .goal-sub {
+      color: rgba(255,150,150,0.78);
+      animation: goal-fade 0.45s 0.3s ease-out both;
+    }
+    @keyframes concede-drop {
+      from { transform: translateY(-60px) scaleY(0.8); opacity: 0; }
+      60%  { transform: translateY(6px)   scaleY(1.02); }
+      to   { transform: translateY(0)     scaleY(1);    opacity: 1; }
+    }
+    @keyframes screen-shake {
+      0%,100% { transform: translate(0,0); }
+      12%     { transform: translate(-11px,-4px); }
+      24%     { transform: translate(11px, 4px); }
+      36%     { transform: translate(-8px,-3px); }
+      48%     { transform: translate(8px, 3px); }
+      62%     { transform: translate(-5px,-1px); }
+      74%     { transform: translate(5px, 1px); }
+      88%     { transform: translate(-2px, 0); }
+    }
+
+    /* ── mobile ── */
+    @media (max-width: 600px) {
+      .lb-header { padding: 14px 18px 0; }
+      .lb-title  { font-size: 1.05rem; letter-spacing: 3px; }
+      .lb-ball   { font-size: 1.5rem; }
+      .lb-body   { gap: 20px; padding-bottom: 28px; }
+      .lb-card   { width: 80px; height: 120px; }
+      .lb-card.lb-selected { width: 130px; height: 192px; }
+      #lb-kickoff { padding: 13px 38px; font-size: 0.9rem; letter-spacing: 5px; }
+      .lb-tm-btn  { padding: 7px 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ══ LOBBY ══════════════════════════════════════════════════════ -->
+  <div id="lobby">
+    <header class="lb-header">
+      <div class="lb-logo">
+        <span class="lb-ball">⚽</span>
+        <span class="lb-title">Soccer Game</span>
+      </div>
+      <span class="lb-ver">ver 3</span>
+    </header>
+
+    <main class="lb-body">
+      <p class="lb-section-label">Select your player</p>
+
+      <div id="lb-row"></div>
+
+      <div class="lb-tm-row">
+        <span class="lb-tm-label">Teammate</span>
+        <div class="lb-tm-toggle">
+          <button class="lb-tm-btn active" id="tm-yes">あり</button>
+          <button class="lb-tm-btn" id="tm-no">なし</button>
+        </div>
+      </div>
+
+      <button id="lb-kickoff">KICK OFF</button>
+
+      <span class="lb-hint">← → で選択　　Enter でスタート</span>
+    </main>
+  </div>
+
+  <!-- ══ スコア表示 ═══════════════════════════════════════════════════ -->
+  <div id="score-display">
+    <span class="score-label">YOU</span>
+    <span class="score-num" id="score-player">0</span>
+    <span class="score-dash">–</span>
+    <span class="score-num" id="score-cpu">0</span>
+    <span class="score-label">CPU</span>
+  </div>
+
+  <!-- ══ ゴールフラッシュ ══════════════════════════════════════════════ -->
+  <div id="goal-flash">
+    <div class="goal-word">GOAL!</div>
+    <div class="goal-sub" id="goal-sub-text"></div>
+  </div>
+
+  <!-- ══ LOADING ════════════════════════════════════════════════════ -->
+  <div id="loading">
+    <h1>⚽ Soccer Game</h1>
+    <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
+    <div id="loading-msg">Loading character...</div>
+    <div id="loading-error"></div>
+  </div>
+
+  <div id="ui">
+    <span>W / ↑ : 前進</span>
+    <span>S / ↓ : 後退</span>
+    <span>A / ← : 左移動</span>
+    <span>D / → : 右移動</span>
+    <span>Q : 左回転</span>
+    <span>E : 右回転</span>
+    <span>Shift : ダッシュ</span>
+    <span>F : キック（低）</span>
+    <span>G : キック（ロフト）</span>
+    <span>H : カーブ左</span>
+    <span>J : カーブ右</span>
+    <span>R : パス</span>
+    <span>T : タックル（ボールなし時）</span>
+    <span>Z : スピン（ドリブル時）</span>
+  </div>
+
+  <div id="info">Soccer App ver3</div>
+
+  <!-- プニコン -->
+  <div id="joystick-base"><div id="joystick-knob"></div></div>
+
+  <!-- タッチ操作ボタン（右側のみ） -->
+  <div id="touch-controls">
+    <div class="touch-btn" id="btn-pass">パス</div>
+    <div class="touch-btn" id="btn-spin">スピン</div>
+    <div class="touch-btn" id="btn-kick">低</div>
+    <div class="touch-btn" id="btn-loft">高</div>
+    <div class="touch-btn" id="btn-curve-left">↖曲</div>
+    <div class="touch-btn" id="btn-curve-right">曲↗</div>
+    <div class="touch-btn" id="btn-tackle">タックル</div>
+    <div class="touch-btn" id="btn-sprint">⚡</div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="./js/lobby.js"></script>
+</body>
+</html>

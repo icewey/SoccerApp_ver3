@@ -1,0 +1,33 @@
+# アカウント・認証情報（絶対にコミットしない）
+アカウント情報.txt
+*.env
+.env*
+
+# バックアップフォルダ
+キャラ/ｂｋ/
+キャラ/熱血主人公/ｂｋ/
+キャラ/玲王的なキャラ/ｂｋ/
+
+# ZIPアーカイブ
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# エディタ
+.vscode/
+.idea/
+*.suo
+*.user
+
+# ログ
+*.log
+npm-debug.log*
