@@ -385,10 +385,10 @@ function updateTeammate(dt) {
   } else {
     if (teammateState === 'dribble') teammateState = 'support';
     if (teammateState === 'receive' && (ballOwner === 'player' || ballVel.lengthSq() < 1)) teammateState = 'support';
-    // ルーズボール（誰も持っていない）→ チェイス
-    if (ballOwner === 'none' && teammateState !== 'receive') teammateState = 'chase';
-    // ボールが誰かの手に渡ったらチェイス解除
-    if (teammateState === 'chase' && ballOwner !== 'none') teammateState = 'support';
+    // ルーズボール or 敵ボール → チェイス
+    if ((ballOwner === 'none' || ballOwner === 'enemy') && teammateState !== 'receive') teammateState = 'chase';
+    // 味方・プレイヤーが持ったらチェイス解除
+    if (teammateState === 'chase' && (ballOwner === 'player' || ballOwner === 'teammate')) teammateState = 'support';
   }
 
   const targetPos = getTeammateTargetPos();
@@ -420,6 +420,17 @@ function updateTeammate(dt) {
     const angleRatio = distToGoal > 0 ? Math.abs(teammate.position.z) / distToGoal : 0;
     if (angleRatio <= 0.65 || distToGoal <= 8) {
       teammateShoot();
+    }
+  }
+
+  // 敵ボール保持中 → 接近で奪取
+  if (ballOwner === 'enemy' && hasEnemy && teammatePickupCooldown <= 0) {
+    const dToBall = new THREE.Vector3().subVectors(ballMesh.position, teammate.position);
+    dToBall.y = 0;
+    if (dToBall.length() < DRIBBLE_DIST * 1.2) {
+      ballOwner = 'teammate';
+      enemyPickupCooldown = 0.8;
+      teammateState = 'dribble';
     }
   }
 
@@ -847,7 +858,7 @@ function onCoreLoaded() {
   const pct = Math.round((coreReady / CORE_TOTAL) * 100);
   loadingBar.style.width = pct + '%';
   if (coreReady === CORE_TOTAL) {
-    if (hasEnemy) enemy.position.y = groundY;
+    if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
     loadingEl.style.display = 'none';
     if (scoreDisplay) scoreDisplay.style.display = 'flex';
     gameStarted = true;
@@ -955,6 +966,7 @@ export function startGame(config) {
         });
         enemy.add(fbx);
         enemy.position.set(-15, 0, 0);
+        enemy.visible = false; // ゲーム開始まで非表示（Tポーズ防止）
         scene.add(enemy);
         enemyMixer = new THREE.AnimationMixer(fbx);
         enemyMixer.addEventListener('finished', e => {
