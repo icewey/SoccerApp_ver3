@@ -262,78 +262,26 @@ function passFromTeammate() {
 
 // ── チームメートシュート ───────────────────────────────────────────────────
 function teammateShoot() {
-  if (ballOwner !== 'teammate' || teammateKicking) return;
-  teammateKicking = true;
-  fadeToTeammateClip('kick', false);
-  const delay = clips['kick'] ? clips['kick'].duration * 0.55 * 1000 : 300;
-  setTimeout(() => {
-    if (ballOwner !== 'teammate') { teammateKicking = false; return; }
-    const aimZ   = (Math.random() - 0.5) * 5;
-    const goal   = new THREE.Vector3(52.5, 1.0, aimZ);
-    const toGoal = new THREE.Vector3().subVectors(goal, ballMesh.position);
-    toGoal.y = 0;
-    const dist   = toGoal.length();
-    const dir    = toGoal.normalize();
-    const hSpeed = Math.min(24, Math.max(14, dist * 1.1));
-    const vSpeed = dist > 18 ? 7 : 4;
-    ballVel.set(dir.x * hSpeed, vSpeed, dir.z * hSpeed);
-    ballCurveRate          = 0;
-    ballOwner              = 'none';
-    isDribbling            = false;
-    teammatePickupCooldown = 1.5;
-    teammateState          = 'support';
-  }, delay);
-}
-
-// ── 敵アニメーション ──────────────────────────────────────────────────────
-function fadeToEnemyClip(name, loop = true) {
-  if (!enemyMixer || !clips[name]) return;
-  const next = enemyMixer.clipAction(clips[name]);
-  if (next === enemyCurrent && loop) return;
-  next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
-  next.clampWhenFinished = !loop;
-  if (enemyCurrent && enemyCurrent !== next) enemyCurrent.fadeOut(0.15);
-  // Tポーズ防止: 新アニメは即 weight=1 で開始
-  next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
-  enemyCurrent = next;
+  cpuShoot({
+    ownerKey:   'teammate',
+    goalX:      52.5,
+    anim:       teammateAnim,
+    getKicking: () => teammateKicking,
+    setKicking: v => { teammateKicking = v; },
+    onDone:     () => { teammatePickupCooldown = 1.5; teammateState = 'support'; },
+  });
 }
 
 // ── 敵シュート ────────────────────────────────────────────────────────────
 function enemyShoot() {
-  if (ballOwner !== 'enemy') return;
-  enemyKicking = true;
-  fadeToEnemyClip('kick', false);
-  // プレイヤーと同様、キックアニメの55%タイミングでボール発射
-  const delay = clips['kick'] ? clips['kick'].duration * 0.55 * 1000 : 300;
-  setTimeout(() => {
-    if (ballOwner !== 'enemy') return;
-    const aimZ   = (Math.random() - 0.5) * 5;
-    const goal   = new THREE.Vector3(-52.5, 1.0, aimZ);
-    const toGoal = new THREE.Vector3().subVectors(goal, ballMesh.position);
-    toGoal.y = 0;
-    const dist   = toGoal.length();
-    const dir    = toGoal.normalize();
-    const hSpeed = Math.min(24, Math.max(14, dist * 1.1));
-    const vSpeed = dist > 18 ? 7 : 4;
-    ballVel.set(dir.x * hSpeed, vSpeed, dir.z * hSpeed);
-    ballCurveRate       = 0;
-    ballOwner           = 'none';
-    isDribbling         = false;
-    enemyPickupCooldown = 1.5;
-    enemyState          = 'chase';
-  }, delay);
-}
-
-// ── チームメートアニメーション ────────────────────────────────────────────
-function fadeToTeammateClip(name, loop = true) {
-  if (!teammateMixer || !clips[name]) return;
-  const next = teammateMixer.clipAction(clips[name]);
-  if (next === teammateCurrent && loop) return;
-  next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
-  next.clampWhenFinished = !loop;
-  if (teammateCurrent && teammateCurrent !== next) teammateCurrent.fadeOut(0.15);
-  next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
-  teammateCurrent = next;
+  cpuShoot({
+    ownerKey:   'enemy',
+    goalX:      -52.5,
+    anim:       enemyAnim,
+    getKicking: () => enemyKicking,
+    setKicking: v => { enemyKicking = v; },
+    onDone:     () => { enemyPickupCooldown = 1.5; enemyState = 'chase'; },
+  });
 }
 
 // ── チームメートAI ────────────────────────────────────────────────────────
@@ -402,7 +350,7 @@ function updateTeammate(dt) {
   const toTarget  = new THREE.Vector3().subVectors(targetPos, teammate.position);
   toTarget.y = 0;
   const dist  = toTarget.length();
-  const moving = dist > 0.4;
+  const moving = dist > 0.4 && !teammateKicking;
 
   const chaseOrReceive = teammateState === 'chase' || teammateState === 'receive';
   if (moving) {
@@ -742,17 +690,60 @@ function stripRootMotion(clip) {
   return clip;
 }
 
-function fadeToClip(name, loop = true) {
-  if (!mixer || !clips[name]) return;
-  const next = mixer.clipAction(clips[name]);
-  // ループアニメは同じアクションなら何もしない。ワンショットは必ず再トリガー
-  if (next === current && loop) return;
+// ── アニメ状態プロキシ（getter/setter で let 変数を共有参照）─────────────
+const playerAnim   = {
+  get mixer()   { return mixer; },        set mixer(v)   { mixer = v; },
+  get current() { return current; },      set current(v) { current = v; },
+};
+const teammateAnim = {
+  get mixer()   { return teammateMixer; },  set mixer(v)   { teammateMixer = v; },
+  get current() { return teammateCurrent; },set current(v) { teammateCurrent = v; },
+};
+const enemyAnim = {
+  get mixer()   { return enemyMixer; },   set mixer(v)   { enemyMixer = v; },
+  get current() { return enemyCurrent; }, set current(v) { enemyCurrent = v; },
+};
+
+// ── 共通アニメーション切り替え ────────────────────────────────────────────
+function fadeToMixerClip(anim, name, loop = true) {
+  if (!anim.mixer || !clips[name]) return;
+  const next = anim.mixer.clipAction(clips[name]);
+  if (next === anim.current && loop) return;
   next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
   next.clampWhenFinished = !loop;
-  if (current && current !== next) current.fadeOut(0.15);
+  if (anim.current && anim.current !== next) anim.current.fadeOut(0.15);
   next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
-  current = next;
+  anim.current = next;
 }
+
+// ── 共通 CPU シュート ─────────────────────────────────────────────────────
+function cpuShoot({ ownerKey, goalX, anim, getKicking, setKicking, onDone }) {
+  if (ballOwner !== ownerKey || getKicking()) return;
+  setKicking(true);
+  fadeToMixerClip(anim, 'kick', false);
+  const delay = clips['kick'] ? clips['kick'].duration * 0.55 * 1000 : 300;
+  setTimeout(() => {
+    if (ballOwner !== ownerKey) { setKicking(false); return; }
+    const aimZ   = (Math.random() - 0.5) * 5;
+    const goal   = new THREE.Vector3(goalX, 1.0, aimZ);
+    const toGoal = new THREE.Vector3().subVectors(goal, ballMesh.position);
+    toGoal.y = 0;
+    const dist   = toGoal.length();
+    const dir    = toGoal.normalize();
+    const hSpeed = Math.min(24, Math.max(14, dist * 1.1));
+    const vSpeed = dist > 18 ? 7 : 4;
+    ballVel.set(dir.x * hSpeed, vSpeed, dir.z * hSpeed);
+    ballCurveRate = 0;
+    ballOwner     = 'none';
+    isDribbling   = false;
+    onDone();
+  }, delay);
+}
+
+// ── アニメーションラッパー（呼び出し元は変更不要）────────────────────────
+function fadeToClip(name, loop = true)         { fadeToMixerClip(playerAnim,   name, loop); }
+function fadeToTeammateClip(name, loop = true) { fadeToMixerClip(teammateAnim, name, loop); }
+function fadeToEnemyClip(name, loop = true)    { fadeToMixerClip(enemyAnim,    name, loop); }
 
 // ── Loading ───────────────────────────────────────────────────────────────
 const loadingEl  = document.getElementById('loading');
