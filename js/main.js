@@ -851,15 +851,54 @@ let gameStarted = false;
 
 // ── マルチプレイヤー ──────────────────────────────────────────────
 let isMultiplayer     = false;
-let mpRole            = null;      // 'host' | 'guest'
-let mpHandlers        = null;      // { publishPlayer, publishBall, publishScore, watchGame }
+let mpRole            = null;
+let mpHandlers        = null;
 let remotePeer        = new THREE.Group();
 let remotePeerMixer   = null;
-let remotePeerClipAct = {};        // { idle, run }
-let remotePlayerState = null;      // 受信した相手の状態
-let remoteBallState   = null;      // 受信したボール状態
+let remotePeerClipAct = {};
+let remoteBallState   = null;
 let mpTimer           = 0;
-let gameWatcher       = null;      // Firebase unsubscribe
+let gameWatcher       = null;
+
+// エンティティ補間バッファ（受信スナップショットをタイムスタンプ付きで保持）
+const INTERP_DELAY    = 120;   // ms: この分だけ過去を描画してスムーズに補間
+const PEER_BUF_MAX    = 16;
+const BALL_BUF_MAX    = 16;
+const peerBuf         = [];    // { ts, x, z, ry, anim }[]
+const ballBuf         = [];    // { ts, x, y, z, vx, vy, vz }[]
+
+function pushPeerBuf(state) {
+  peerBuf.push({ ts: Date.now(), ...state });
+  if (peerBuf.length > PEER_BUF_MAX) peerBuf.shift();
+}
+function pushBallBuf(state) {
+  ballBuf.push({ ts: Date.now(), ...state });
+  if (ballBuf.length > BALL_BUF_MAX) ballBuf.shift();
+}
+
+// 補間: renderTime 時点での値を2点間で線形補間して返す
+function interpBuf(buf, renderTime) {
+  if (buf.length === 0) return null;
+  // renderTime より古い最新スナップ
+  let prev = null, next = null;
+  for (let i = buf.length - 1; i >= 0; i--) {
+    if (buf[i].ts <= renderTime) { prev = buf[i]; break; }
+  }
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i].ts > renderTime) { next = buf[i]; break; }
+  }
+  if (!prev) return next ?? buf[0];
+  if (!next) return prev;
+  const t = Math.max(0, Math.min(1, (renderTime - prev.ts) / (next.ts - prev.ts)));
+  // 数値フィールドを補間、文字列は prev を使用
+  const result = {};
+  for (const k of Object.keys(next)) {
+    result[k] = (typeof next[k] === 'number')
+      ? prev[k] + (next[k] - prev[k]) * t
+      : prev[k];
+  }
+  return result;
+}
 
 function fadeToRemoteClip(name) {
   if (!remotePeerMixer || !clips[name]) return;
@@ -882,8 +921,8 @@ function onCoreLoaded() {
       // ゲーム状態を Firebase で監視開始
       gameWatcher = mpHandlers.watchGame(data => {
         const remote = mpRole === 'host' ? data?.guest : data?.host;
-        if (remote) remotePlayerState = remote;
-        if (data?.ball) remoteBallState = data.ball;
+        if (remote) pushPeerBuf(remote);          // バッファに積む
+        if (data?.ball) pushBallBuf(data.ball);  // バッファに積む
         if (data?.score && mpRole === 'guest') {
           playerScore = data.score.guest ?? 0;
           cpuScore    = data.score.host  ?? 0;
@@ -1199,40 +1238,47 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   if (mixer) mixer.update(dt);
 
-  // マルチプレイヤー: Guest はボール物理をスキップ（Hostから受け取る）
-  if (!isMultiplayer || mpRole === 'host') updateBall(dt);
-  else if (isMultiplayer && remoteBallState && ballOwner !== 'player') {
-    // Guest: ボール位置をFirebaseから補間適用
-    ballMesh.position.x += (remoteBallState.x - ballMesh.position.x) * 0.4;
-    ballMesh.position.y += (remoteBallState.y - ballMesh.position.y) * 0.4;
-    ballMesh.position.z += (remoteBallState.z - ballMesh.position.z) * 0.4;
-    ballVel.set(remoteBallState.vx ?? 0, remoteBallState.vy ?? 0, remoteBallState.vz ?? 0);
+  if (!isMultiplayer || mpRole === 'host') {
+    updateBall(dt);
+  } else if (isMultiplayer && mpRole === 'guest') {
+    // Guest: 補間済みボール位置を適用（自分がボール保持中は除く）
+    if (ballOwner !== 'player') {
+      const renderTime = Date.now() - INTERP_DELAY;
+      const bs = interpBuf(ballBuf, renderTime);
+      if (bs) {
+        ballMesh.position.set(bs.x, bs.y, bs.z);
+        ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
+      }
+    }
   }
 
   if (!isMultiplayer) {
     updateTeammate(dt);
     updateEnemy(dt);
   } else if (gameStarted) {
-    // リモートプレイヤーの状態を適用
-    if (remotePlayerState && remotePeerMixer) {
-      remotePeer.position.x = remotePlayerState.x;
-      remotePeer.position.z = remotePlayerState.z;
-      remotePeer.rotation.y = remotePlayerState.ry;
-      remotePeerMixer.update(dt);
-      const moving = remotePlayerState.anim !== 'idle';
-      fadeToRemoteClip(moving ? 'run' : 'idle');
+    // リモートプレイヤーをバッファから補間して描画
+    if (remotePeerMixer) {
+      const renderTime = Date.now() - INTERP_DELAY;
+      const ps = interpBuf(peerBuf, renderTime);
+      if (ps) {
+        remotePeer.position.x = ps.x;
+        remotePeer.position.z = ps.z;
+        // Y軸回転の最短経路補間
+        let ryDiff = (ps.ry - remotePeer.rotation.y + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+        remotePeer.rotation.y += ryDiff * Math.min(1, 18 * dt);
+        remotePeerMixer.update(dt);
+        fadeToRemoteClip(ps.anim !== 'idle' ? 'run' : 'idle');
+      }
     }
-    // 自分の状態を20Hzで送信
+    // 自分の状態を30Hzで送信
     mpTimer += dt;
-    if (mpTimer >= 0.05) {
+    if (mpTimer >= 0.033) {
       mpTimer = 0;
-      const anim = getDesiredAnim() || 'idle';
       mpHandlers.publishPlayer(mpRole, {
         x: player.position.x, z: player.position.z,
-        ry: player.rotation.y, anim,
+        ry: player.rotation.y, anim: getDesiredAnim() || 'idle',
       });
       if (mpRole === 'host') {
-        // Host がボール状態を送信
         mpHandlers.publishBall({
           x: ballMesh.position.x, y: ballMesh.position.y, z: ballMesh.position.z,
           vx: ballVel.x, vy: ballVel.y, vz: ballVel.z,
