@@ -1316,8 +1316,18 @@ export function startGame(config) {
 
     function loadOneGK(gkGroup, gkChar, gkAnimProxy, tintColor, gkSt) {
       loader.load(GK_FBX_PATH, fbx => {
-        fbx.scale.setScalar(0.01);
         fbx.rotation.y = Math.PI;
+
+        // ── スケール自動計算（Mixamo/MeshyAI など単位系の違いを吸収） ──
+        // 先に scale=1 のままバウンディングボックスを計算して身長を測定し、
+        // 1.75m になるようスケールを設定する
+        gkGroup.add(fbx);
+        gkGroup.updateMatrixWorld(true);
+        const rawBox = new THREE.Box3().setFromObject(fbx);
+        const rawH = rawBox.max.y - rawBox.min.y;
+        const autoScale = (rawH > 0.01) ? (1.75 / rawH) : 0.01;
+        fbx.scale.setScalar(autoScale);
+
         fbx.traverse(c => {
           if (c.isMesh) {
             c.castShadow = c.receiveShadow = true;
@@ -1331,20 +1341,13 @@ export function startGame(config) {
             }
           }
         });
-        gkGroup.add(fbx);
-        // モデルのメッシュ下端をy=0に合わせるY補正（プレイヤーと同じ方式）
+
+        // スケール変更後に再計算してY補正
         gkGroup.updateMatrixWorld(true);
-        const gkBox = new THREE.Box3();
-        fbx.traverse(c => {
-          if (c.isMesh && c.geometry) {
-            c.geometry.computeBoundingBox();
-            gkBox.union(c.geometry.boundingBox.clone().applyMatrix4(c.matrixWorld));
-          }
-        });
-        if (!gkBox.isEmpty() && isFinite(gkBox.min.y) && gkBox.min.y < -0.01) {
-          gkGroup.position.y = -gkBox.min.y;
-        }
-        gkGroup.userData.gkGroundOffset = gkGroup.position.y;
+        const gkBox = new THREE.Box3().setFromObject(fbx);
+        const gkGroundY = (isFinite(gkBox.min.y) && gkBox.min.y < -0.01) ? -gkBox.min.y : 0;
+        gkGroup.position.y = gkGroundY;
+        gkGroup.userData.gkGroundOffset = gkGroundY;
         gkGroup.visible = false;
         scene.add(gkGroup);
         const newMixer = new THREE.AnimationMixer(fbx);
