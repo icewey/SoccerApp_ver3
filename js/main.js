@@ -33,16 +33,21 @@ fillLight.position.set(-40, 30, -30);
 scene.add(fillLight);
 
 // ── Soccer Field ─────────────────────────────────────────────────────────
-function buildField() {
-  const root = new THREE.Group();
-  const stripeCount = 10, stripeW = 105 / stripeCount;
+function buildField(halfW, halfD) {
+  const root   = new THREE.Group();
+  const goalX  = halfW + 1.5;
+  const totalW = goalX * 2;
+  const totalD = halfD * 2;
+  const sc     = halfW / 51; // フィールドスケール係数
+
+  const stripeCount = 10, stripeW = totalW / stripeCount;
   for (let i = 0; i < stripeCount; i++) {
     const stripe = new THREE.Mesh(
-      new THREE.PlaneGeometry(stripeW, 68),
+      new THREE.PlaneGeometry(stripeW, totalD),
       new THREE.MeshLambertMaterial({ color: i % 2 === 0 ? 0x2e7d32 : 0x388e3c })
     );
     stripe.rotation.x = -Math.PI / 2;
-    stripe.position.set(-52.5 + stripeW * (i + 0.5), 0, 0);
+    stripe.position.set(-goalX + stripeW * (i + 0.5), 0, 0);
     stripe.receiveShadow = true;
     root.add(stripe);
   }
@@ -52,49 +57,54 @@ function buildField() {
     m.position.set(x, 0.01, z);
     root.add(m);
   }
-  line(105.2, 0.18, 0, 34); line(105.2, 0.18, 0, -34);
-  line(0.18, 68, 52.5, 0); line(0.18, 68, -52.5, 0);
-  line(0.18, 68, 0, 0);
-  const torus = new THREE.Mesh(new THREE.TorusGeometry(9.15, 0.1, 8, 64), white);
+  line(totalW + 0.2, 0.18, 0,  halfD); line(totalW + 0.2, 0.18, 0, -halfD);
+  line(0.18, totalD, goalX, 0); line(0.18, totalD, -goalX, 0);
+  line(0.18, totalD, 0, 0);
+
+  const circleR = 9.15 * sc;
+  const torus = new THREE.Mesh(new THREE.TorusGeometry(circleR, 0.1, 8, 64), white);
   torus.rotation.x = Math.PI / 2; torus.position.y = 0.01; root.add(torus);
-  const spot = new THREE.Mesh(new THREE.CircleGeometry(0.35, 16), white);
+  const spot = new THREE.Mesh(new THREE.CircleGeometry(0.35 * sc, 16), white);
   spot.rotation.x = -Math.PI / 2; spot.position.y = 0.01; root.add(spot);
+
   [-1, 1].forEach(s => {
-    const ox = s * 52.5;
-    line(16.5, 0.18, ox - s * 8.25, 20.16); line(16.5, 0.18, ox - s * 8.25, -20.16);
-    line(0.18, 40.32, ox - s * 16.5, 0);
-    line(5.5, 0.18, ox - s * 2.75, 9.16); line(5.5, 0.18, ox - s * 2.75, -9.16);
-    line(0.18, 18.32, ox - s * 5.5, 0);
+    const ox  = s * goalX;
+    const pd  = 16.5 * sc, phz = 20.16 * sc; // ペナルティエリア
+    const gd  = 5.5  * sc, ghz = 9.16  * sc; // ゴールエリア
+    const ghw = 3.66 * sc;                    // ゴール半幅
+
+    line(pd * 2, 0.18, ox - s * pd, phz);  line(pd * 2, 0.18, ox - s * pd, -phz);
+    line(0.18, phz * 2, ox - s * pd * 2, 0);
+    line(gd * 2, 0.18, ox - s * gd, ghz);  line(gd * 2, 0.18, ox - s * gd, -ghz);
+    line(0.18, ghz * 2, ox - s * gd * 2, 0);
+
     const goalMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
     const pole = () => new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.44, 10), goalMat);
-    [[-3.66], [3.66]].forEach(([z]) => {
+    [[-ghw], [ghw]].forEach(([z]) => {
       const p = pole(); p.position.set(ox, 1.22, z); p.castShadow = true; root.add(p);
     });
-    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 7.32, 10), goalMat);
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, ghw * 2, 10), goalMat);
     bar.rotation.x = Math.PI / 2; bar.position.set(ox, 2.44, 0); root.add(bar);
 
     // ゴールネット
     const netMat = new THREE.LineBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.5 });
     const pts = [];
     const seg = (ax,ay,az,bx,by,bz) => { pts.push(new THREE.Vector3(ax,ay,az), new THREE.Vector3(bx,by,bz)); };
-    const HW = 3.66, H = 2.44, backX = ox + s * 2.2;
-    // 後面グリッド（縦8本・横5本）
-    for (let i=0;i<=8;i++) { const z=-HW+(7.32/8)*i; seg(backX,0,z,backX,H,z); }
-    for (let j=0;j<=5;j++) { const y=(H/5)*j;        seg(backX,y,-HW,backX,y,HW); }
-    // 上面グリッド
-    for (let i=0;i<=8;i++) { const z=-HW+(7.32/8)*i; seg(ox,H,z,backX,H,z); }
-    for (let k=0;k<=3;k++) { const x=ox+(s*2.2/3)*k; seg(x,H,-HW,x,H,HW); }
-    // 左側面（z=-HW）
-    for (let j=0;j<=5;j++) { const y=(H/5)*j;        seg(ox,y,-HW,backX,y,-HW); }
-    for (let k=0;k<=3;k++) { const x=ox+(s*2.2/3)*k; seg(x,0,-HW,x,H,-HW); }
-    // 右側面（z=+HW）
-    for (let j=0;j<=5;j++) { const y=(H/5)*j;        seg(ox,y,HW,backX,y,HW); }
-    for (let k=0;k<=3;k++) { const x=ox+(s*2.2/3)*k; seg(x,0,HW,x,H,HW); }
+    const HW = ghw, H = 2.44, backX = ox + s * 2.2 * sc;
+    for (let i=0;i<=8;i++) { const z=-HW+(HW*2/8)*i; seg(backX,0,z,backX,H,z); }
+    for (let j=0;j<=5;j++) { const y=(H/5)*j;         seg(backX,y,-HW,backX,y,HW); }
+    for (let i=0;i<=8;i++) { const z=-HW+(HW*2/8)*i; seg(ox,H,z,backX,H,z); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*2.2*sc/3)*k; seg(x,H,-HW,x,H,HW); }
+    for (let j=0;j<=5;j++) { const y=(H/5)*j;         seg(ox,y,-HW,backX,y,-HW); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*2.2*sc/3)*k; seg(x,0,-HW,x,H,-HW); }
+    for (let j=0;j<=5;j++) { const y=(H/5)*j;         seg(ox,y,HW,backX,y,HW); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*2.2*sc/3)*k; seg(x,0,HW,x,H,HW); }
     root.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), netMat));
   });
   return root;
 }
-scene.add(buildField());
+let fieldRoot = buildField(51, 34);
+scene.add(fieldRoot);
 
 // ── Ball ──────────────────────────────────────────────────────────────────
 function createBallTexture() {
@@ -264,7 +274,7 @@ function passFromTeammate() {
 function teammateShoot() {
   cpuShoot({
     ownerKey:   'teammate',
-    goalX:      52.5,
+    goalX:      GOAL_X,
     anim:       teammateAnim,
     getKicking: () => teammateKicking,
     setKicking: v => { teammateKicking = v; },
@@ -276,7 +286,7 @@ function teammateShoot() {
 function enemyShoot() {
   cpuShoot({
     ownerKey:   'enemy',
-    goalX:      -52.5,
+    goalX:      -GOAL_X,
     anim:       enemyAnim,
     getKicking: () => enemyKicking,
     setKicking: v => { enemyKicking = v; },
@@ -288,7 +298,7 @@ function enemyShoot() {
 function getTeammateTargetPos() {
   // ドリブル: 常にゴール方向へ前進
   if (ballOwner === 'teammate') {
-    return new THREE.Vector3(52.5, 0, teammate.position.z * 0.3);
+    return new THREE.Vector3(GOAL_X, 0, teammate.position.z * 0.3);
   }
 
   // チェイス/プレス: ボールを追う（後退は最大15mに制限）
@@ -361,10 +371,11 @@ function updateTeammate(dt) {
   }
 
   // ── シュート判定
-  const PENALTY_Z = 20.16;
+  const PENALTY_Z = FIELD_HALF_D * 0.611;
   if (ballOwner === 'teammate' && !teammateKicking
-      && teammate.position.x > 28 && Math.abs(teammate.position.z) <= PENALTY_Z) {
-    const distToGoal = 52.5 - teammate.position.x;
+      && teammate.position.x > GOAL_X - FIELD_HALF_W * 0.48
+      && Math.abs(teammate.position.z) <= PENALTY_Z) {
+    const distToGoal = GOAL_X - teammate.position.x;
     const angleRatio = distToGoal > 0 ? Math.abs(teammate.position.z) / distToGoal : 0;
     if (angleRatio <= 0.65 || distToGoal <= 8) {
       teammateShoot();
@@ -410,9 +421,9 @@ function updateEnemy(dt) {
   // 目標位置を決定
   let targetPos;
   if (enemyState === 'dribble') {
-    // 自陣ゴール（x=-52.5）方向へ中央に絞り込みながら進む
+    // 自陣ゴール方向へ中央に絞り込みながら進む
     const aimZ = enemy.position.z * 0.4;
-    targetPos = new THREE.Vector3(Math.max(-48, enemy.position.x - 8), 0, aimZ);
+    targetPos = new THREE.Vector3(Math.max(-(GOAL_X - 4.5), enemy.position.x - 8), 0, aimZ);
   } else {
     // ボールを追う
     targetPos = ballMesh.position.clone();
@@ -440,9 +451,12 @@ function updateEnemy(dt) {
   enemy.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, enemy.position.x));
   enemy.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, enemy.position.z));
 
-  // シュート判定: 自陣ペナルティエリア内(x<-28, |z|<=20.16)で角度OK
-  if (ballOwner === 'enemy' && !enemyKicking && enemy.position.x < -28 && Math.abs(enemy.position.z) <= 20.16) {
-    const distToGoal = Math.abs(-52.5 - enemy.position.x);
+  // シュート判定: 自陣ペナルティエリア内で角度OK
+  const enemyPenZ = FIELD_HALF_D * 0.611;
+  if (ballOwner === 'enemy' && !enemyKicking
+      && enemy.position.x < -(GOAL_X - FIELD_HALF_W * 0.48)
+      && Math.abs(enemy.position.z) <= enemyPenZ) {
+    const distToGoal = Math.abs(-GOAL_X - enemy.position.x);
     const angleRatio = distToGoal > 0 ? Math.abs(enemy.position.z) / distToGoal : 0;
     if (angleRatio <= 0.65 || distToGoal <= 8) enemyShoot();
   }
@@ -558,12 +572,12 @@ function updateBall(dt) {
     ballVel.z *= BALL_AIR_FRIC;
   }
 
-  // ゴール判定: ゴール口内（|z|<3.66, y<2.44）ならアウト壁をスキップしてゴールへ
-  const _inGoalZ = Math.abs(ballMesh.position.z) < 3.66;
+  // ゴール判定: ゴール口内（|z|<GOAL_HALF_Z, y<2.44）ならアウト壁をスキップしてゴールへ
+  const _inGoalZ = Math.abs(ballMesh.position.z) < GOAL_HALF_Z;
   const _inGoalY = ballMesh.position.y < 2.44 + BALL_R;
   if (_inGoalZ && _inGoalY) {
-    if      (ballMesh.position.x >  52.5) { scoreGoal('player'); return; }
-    else if (ballMesh.position.x < -52.5) { scoreGoal('cpu');    return; }
+    if      (ballMesh.position.x >  GOAL_X) { scoreGoal('player'); return; }
+    else if (ballMesh.position.x < -GOAL_X) { scoreGoal('cpu');    return; }
   }
   if (Math.abs(ballMesh.position.x) > FIELD_HALF_W + 1 && !(_inGoalZ && _inGoalY)) {
     ballVel.x *= -0.6;
@@ -850,6 +864,21 @@ function onCoreLoaded() {
 
 // ゲーム開始（lobby.jsからimportされる）
 export function startGame(config) {
+  // フィールドサイズ設定
+  const FIELD_PRESETS = {
+    full:    { halfW: 51, halfD: 34 },
+    medium:  { halfW: 35, halfD: 25 },
+    compact: { halfW: 23, halfD: 16 },
+  };
+  const fs = FIELD_PRESETS[config.fieldSize] || FIELD_PRESETS.full;
+  FIELD_HALF_W = fs.halfW;
+  FIELD_HALF_D = fs.halfD - 1;
+  GOAL_X       = fs.halfW + 1.5;
+  GOAL_HALF_Z  = 3.66 * (fs.halfW / 51);
+  scene.remove(fieldRoot);
+  fieldRoot = buildField(fs.halfW, fs.halfD);
+  scene.add(fieldRoot);
+
   hasTeammate = config.withTeammate;
   hasEnemy    = !!config.enemyFbx;
   if (hasEnemy) CORE_TOTAL++;
@@ -995,8 +1024,10 @@ export function startGame(config) {
 const MOVE_SPEED   = 8;
 const RUN_SPEED    = 14;
 const TURN_SPEED   = 1.2;
-const FIELD_HALF_W = 51;
-const FIELD_HALF_D = 33;
+let FIELD_HALF_W = 51;
+let FIELD_HALF_D = 33;
+let GOAL_X       = 52.5;
+let GOAL_HALF_Z  = 3.66;
 
 const smoothCamTarget = new THREE.Vector3(0, 1, 0);
 

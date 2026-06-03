@@ -59,6 +59,7 @@ const CHARACTERS = [
 
 let selectedIdx = 0;
 let withTeammate = true;
+let fieldSize = 'full';
 
 function buildCard(char, idx) {
   const card = document.createElement('div');
@@ -136,7 +137,7 @@ function kickOff() {
   const loadingEl = document.getElementById('loading');
   loadingEl.style.display = 'flex';
 
-  startGame({ charFbx: char.fbx, withTeammate, enemyFbx: enemyChar?.fbx ?? null });
+  startGame({ charFbx: char.fbx, withTeammate, fieldSize, enemyFbx: enemyChar?.fbx ?? null });
 }
 
 function init() {
@@ -151,6 +152,15 @@ function init() {
     withTeammate = false;
     document.getElementById('tm-no').classList.add('active');
     document.getElementById('tm-yes').classList.remove('active');
+  });
+
+  const fsBtns = ['full', 'medium', 'compact'];
+  fsBtns.forEach(size => {
+    document.getElementById(`fs-${size}`).addEventListener('click', () => {
+      fieldSize = size;
+      fsBtns.forEach(s => document.getElementById(`fs-${s}`).classList.remove('active'));
+      document.getElementById(`fs-${size}`).classList.add('active');
+    });
   });
 
   document.getElementById('lb-kickoff').addEventListener('click', kickOff);
