@@ -171,6 +171,10 @@ let gkSessionId  = 0;     // ゲーム再起動時のstale setTimeoutを無効�
 // ── ゴールキーパー ──────────────────────────────────────────────────────────
 const playerGKGroup = new THREE.Group();
 const enemyGKGroup  = new THREE.Group();
+scene.add(playerGKGroup); // enemy と同様にモジュールレベルで追加
+scene.add(enemyGKGroup);
+playerGKGroup.visible = false;
+enemyGKGroup.visible  = false;
 let playerGKMixer   = null;
 let playerGKCurrent = null;
 let enemyGKMixer    = null;
@@ -918,14 +922,12 @@ function resetAfterGoal() {
   pGKSt.state = 'patrol'; pGKSt.holdTimer = 0;
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0;
   if (playerGKMixer) {
-    const pgy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
-    playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), pgy, 0);
+    playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), groundY, 0);
     playerGKMixer.stopAllAction(); playerGKCurrent = null;
     charAnim(playerGKChar, 'idle');
   }
   if (enemyGKMixer) {
-    const egy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
-    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, egy, 0);
+    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, groundY, 0);
     enemyGKMixer.stopAllAction(); enemyGKCurrent = null;
     charAnim(enemyGKChar, 'idle');
   }
@@ -1063,14 +1065,12 @@ function onCoreLoaded() {
   if (coreReady === CORE_TOTAL) {
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
     if (playerGKMixer) {
-      const pgy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
-      playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), pgy, 0);
+      playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), groundY, 0);
       playerGKChar.group.visible = true;
       charAnim(playerGKChar, 'idle');
     }
     if (enemyGKMixer) {
-      const egy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
-      enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, egy, 0);
+      enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, groundY, 0);
       enemyGKChar.group.visible = true;
       charAnim(enemyGKChar, 'idle');
     }
@@ -1131,12 +1131,12 @@ export function startGame(config) {
   // enemy を scene から除去（CPU戦の残骸防止）
   scene.remove(enemy);
   while (enemy.children.length > 0) enemy.remove(enemy.children[0]);
-  // GK を scene から除去
-  scene.remove(playerGKGroup);
+  // GK の旧キャラ削除（scene から除去せず children だけクリア）
   while (playerGKGroup.children.length > 0) playerGKGroup.remove(playerGKGroup.children[0]);
+  playerGKGroup.visible = false;
   playerGKMixer = null; playerGKCurrent = null; playerGKChar.animState = playerGKAnim;
-  scene.remove(enemyGKGroup);
   while (enemyGKGroup.children.length > 0) enemyGKGroup.remove(enemyGKGroup.children[0]);
+  enemyGKGroup.visible  = false;
   enemyGKMixer = null; enemyGKCurrent = null; enemyGKChar.animState = enemyGKAnim;
   // カウンタとゲーム状態リセット
   CORE_TOTAL = 1 + ANIM_FILES.length;
@@ -1316,18 +1316,8 @@ export function startGame(config) {
 
     function loadOneGK(gkGroup, gkChar, gkAnimProxy, tintColor, gkSt) {
       loader.load(GK_FBX_PATH, fbx => {
+        fbx.scale.setScalar(0.01);
         fbx.rotation.y = Math.PI;
-
-        // ── スケール自動計算（Mixamo/MeshyAI など単位系の違いを吸収） ──
-        // 先に scale=1 のままバウンディングボックスを計算して身長を測定し、
-        // 1.75m になるようスケールを設定する
-        gkGroup.add(fbx);
-        gkGroup.updateMatrixWorld(true);
-        const rawBox = new THREE.Box3().setFromObject(fbx);
-        const rawH = rawBox.max.y - rawBox.min.y;
-        const autoScale = (rawH > 0.01) ? (1.75 / rawH) : 0.01;
-        fbx.scale.setScalar(autoScale);
-
         fbx.traverse(c => {
           if (c.isMesh) {
             c.castShadow = c.receiveShadow = true;
@@ -1341,19 +1331,11 @@ export function startGame(config) {
             }
           }
         });
-
-        // スケール変更後に再計算してY補正
-        gkGroup.updateMatrixWorld(true);
-        const gkBox = new THREE.Box3().setFromObject(fbx);
-        const gkGroundY = (isFinite(gkBox.min.y) && gkBox.min.y < -0.01) ? -gkBox.min.y : 0;
-        gkGroup.position.y = gkGroundY;
-        gkGroup.userData.gkGroundOffset = gkGroundY;
-        gkGroup.visible = false;
-        scene.add(gkGroup);
+        gkGroup.add(fbx);
         const newMixer = new THREE.AnimationMixer(fbx);
-        gkAnimProxy.mixer  = newMixer;
-        gkChar.animState   = gkAnimProxy;
-        gkChar.group       = gkGroup;
+        gkAnimProxy.mixer = newMixer;
+        gkChar.animState  = gkAnimProxy;
+        gkChar.group      = gkGroup;
         newMixer.addEventListener('finished', e => {
           if ((gkSt.state === 'save' || gkSt.state === 'dive')
               && ((clips['gk_catch'] && e.action === newMixer.clipAction(clips['gk_catch']))
@@ -1366,7 +1348,7 @@ export function startGame(config) {
           }
         });
         onCoreLoaded();
-      }, undefined, () => onCoreLoaded());
+      }, undefined, err => { console.error('GK load failed:', err); onCoreLoaded(); });
     }
 
     loadOneGK(playerGKGroup, playerGKChar, playerGKAnim, null,     pGKSt);
