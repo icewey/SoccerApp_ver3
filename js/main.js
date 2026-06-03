@@ -917,14 +917,16 @@ function resetAfterGoal() {
 
   pGKSt.state = 'patrol'; pGKSt.holdTimer = 0;
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0;
-  if (playerGKChar.group) {
-    playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), groundY, 0);
-    if (playerGKMixer) { playerGKMixer.stopAllAction(); playerGKCurrent = null; }
+  if (playerGKMixer) {
+    const pgy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
+    playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), pgy, 0);
+    playerGKMixer.stopAllAction(); playerGKCurrent = null;
     charAnim(playerGKChar, 'idle');
   }
-  if (enemyGKChar.group) {
-    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, groundY, 0);
-    if (enemyGKMixer) { enemyGKMixer.stopAllAction(); enemyGKCurrent = null; }
+  if (enemyGKMixer) {
+    const egy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
+    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, egy, 0);
+    enemyGKMixer.stopAllAction(); enemyGKCurrent = null;
     charAnim(enemyGKChar, 'idle');
   }
 
@@ -1060,13 +1062,15 @@ function onCoreLoaded() {
   loadingBar.style.width = pct + '%';
   if (coreReady === CORE_TOTAL) {
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
-    if (playerGKChar.animState?.mixer) {
-      playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), groundY, 0);
+    if (playerGKMixer) {
+      const pgy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
+      playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), pgy, 0);
       playerGKChar.group.visible = true;
       charAnim(playerGKChar, 'idle');
     }
-    if (enemyGKChar.animState?.mixer) {
-      enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, groundY, 0);
+    if (enemyGKMixer) {
+      const egy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
+      enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, egy, 0);
       enemyGKChar.group.visible = true;
       charAnim(enemyGKChar, 'idle');
     }
@@ -1328,6 +1332,19 @@ export function startGame(config) {
           }
         });
         gkGroup.add(fbx);
+        // モデルのメッシュ下端をy=0に合わせるY補正（プレイヤーと同じ方式）
+        gkGroup.updateMatrixWorld(true);
+        const gkBox = new THREE.Box3();
+        fbx.traverse(c => {
+          if (c.isMesh && c.geometry) {
+            c.geometry.computeBoundingBox();
+            gkBox.union(c.geometry.boundingBox.clone().applyMatrix4(c.matrixWorld));
+          }
+        });
+        if (!gkBox.isEmpty() && isFinite(gkBox.min.y) && gkBox.min.y < -0.01) {
+          gkGroup.position.y = -gkBox.min.y;
+        }
+        gkGroup.userData.gkGroundOffset = gkGroup.position.y;
         gkGroup.visible = false;
         scene.add(gkGroup);
         const newMixer = new THREE.AnimationMixer(fbx);
