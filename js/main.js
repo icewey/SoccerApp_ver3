@@ -502,22 +502,20 @@ window.addEventListener('keydown', e => {
   if (gameStarted && !e.repeat) {
     if (e.code === 'KeyF' || e.code === 'KeyG') {
       const lofted = e.code === 'KeyG';
-      const power  = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 1.5 : 1.0;
       isKicking = false;
       if (clips['kick'] && mixer) {
         isKicking = true;
         fadeToClip('kick', false);
-        setTimeout(() => kickBall(lofted, 0, power), clips['kick'].duration * 0.55 * 1000);
+        setTimeout(() => kickBall(lofted, 0, 1.0), clips['kick'].duration * 0.55 * 1000);
       }
     }
     if (e.code === 'KeyH' || e.code === 'KeyJ') {
       const curveDir = e.code === 'KeyH' ? -1 : 1;
-      const power    = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 1.5 : 1.0;
       isKicking = false;
       if (clips['kick'] && mixer) {
         isKicking = true;
         fadeToClip('kick', false);
-        setTimeout(() => kickBall(false, curveDir, power), clips['kick'].duration * 0.55 * 1000);
+        setTimeout(() => kickBall(false, curveDir, 1.0), clips['kick'].duration * 0.55 * 1000);
       }
     }
     if (e.code === 'KeyT' && ballOwner !== 'player' && !isTackling) {
@@ -752,7 +750,6 @@ const ANIM_FILES = [
   ['idle',    './animations/idle.fbx'],
   ['walk',    './animations/walk.fbx'],
   ['run',     './animations/run.fbx'],
-  ['sprint',  './animations/sprint.fbx'],
   ['kick',    './animations/kick.fbx'],
   ['dribble', './animations/Dribble.fbx'],
   ['pass',    './animations/Pass.fbx'],
@@ -1085,13 +1082,12 @@ function getDesiredAnim() {
   const fwd    = keys.has('KeyW') || keys.has('ArrowUp');
   const bwd    = keys.has('KeyS') || keys.has('ArrowDown');
   const strafe = keys.has('KeyA') || keys.has('ArrowLeft') || keys.has('KeyD') || keys.has('ArrowRight');
-  const shift  = keys.has('ShiftLeft') || keys.has('ShiftRight');
   const joyFwd  = joystick.active && joystick.dy < -0.1;
   const joyBwd  = joystick.active && joystick.dy >  0.1;
   const joyStrf = joystick.active && Math.abs(joystick.dx) > 0.1;
   const moving  = fwd || bwd || strafe || joyFwd || joyBwd || joyStrf;
   if (isDribbling && moving && clips['dribble']) return 'dribble';
-  if (moving) return ((fwd || joyFwd) && shift && clips['sprint']) ? 'sprint' : (clips['run'] ? 'run' : 'idle');
+  if (moving) return clips['run'] ? 'run' : 'idle';
   return 'idle';
 }
 
@@ -1257,35 +1253,26 @@ function animate() {
       const bwd      = keys.has('KeyS') || keys.has('ArrowDown');
       const strafeLt = keys.has('KeyA') || keys.has('ArrowLeft');
       const strafeRt = keys.has('KeyD') || keys.has('ArrowRight');
-      const shift    = keys.has('ShiftLeft') || keys.has('ShiftRight');
 
       // 移動方向はカメラ視点角基準
       const camDir   = new THREE.Vector3(-Math.sin(viewAngle), 0, -Math.cos(viewAngle));
       const camRight = new THREE.Vector3( Math.cos(viewAngle), 0, -Math.sin(viewAngle));
 
-      // Shift+左右 = 平行移動 / 左右のみ = 向きも変える（後退中は向き変更なし）
       const moveVec = new THREE.Vector3();
       let wantTurn  = false;
-      if (fwd)               { moveVec.addScaledVector(camDir,    1); wantTurn = true; }
-      if (bwd)               { moveVec.addScaledVector(camDir,   -1); }
-      if (strafeLt && shift) { moveVec.addScaledVector(camRight, -1); }
-      if (strafeRt && shift) { moveVec.addScaledVector(camRight,  1); }
-      if (strafeLt && !shift){ moveVec.addScaledVector(camRight, -1); if (!bwd) wantTurn = true; }
-      if (strafeRt && !shift){ moveVec.addScaledVector(camRight,  1); if (!bwd) wantTurn = true; }
+      if (fwd)      { moveVec.addScaledVector(camDir,    1); wantTurn = true; }
+      if (bwd)      { moveVec.addScaledVector(camDir,   -1); }
+      if (strafeLt) { moveVec.addScaledVector(camRight, -1); if (!bwd) wantTurn = true; }
+      if (strafeRt) { moveVec.addScaledVector(camRight,  1); if (!bwd) wantTurn = true; }
 
-      // プニコン入力（shift+横のみ = 平行移動: 向き・視点変更しない）
-      const joyShift = shift && joystick.active
-        && Math.abs(joystick.dx) > 0.05
-        && Math.abs(joystick.dy) <= 0.05;
       if (joystick.active) {
         if (Math.abs(joystick.dy) > 0.05) { moveVec.addScaledVector(camDir,   -joystick.dy); wantTurn = true; }
-        if (Math.abs(joystick.dx) > 0.05) { moveVec.addScaledVector(camRight,  joystick.dx); if (!joyShift) wantTurn = true; }
+        if (Math.abs(joystick.dx) > 0.05) { moveVec.addScaledVector(camRight,  joystick.dx); wantTurn = true; }
       }
 
       if (moveVec.lengthSq() > 0.001) {
         moveVec.normalize();
-        const speed = ((fwd || bwd) && shift) ? RUN_SPEED : MOVE_SPEED;
-        player.position.addScaledVector(moveVec, speed * dt);
+        player.position.addScaledVector(moveVec, RUN_SPEED * dt);
 
         if (wantTurn) {
           const targetAngle = Math.atan2(-moveVec.x, -moveVec.z);
@@ -1299,10 +1286,8 @@ function animate() {
       player.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, player.position.x));
       player.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, player.position.z));
 
-      // viewAngle をプレイヤーの向きへゆっくり遅延追従（Q/E・スワイプ中、Shift横移動中は追従しない）
-      const shiftStrafeOnly = joyShift
-        || (shift && (strafeLt || strafeRt) && !fwd && !bwd && !joystick.active);
-      if (!shiftStrafeOnly && !keys.has('KeyQ') && !keys.has('KeyE') && !lookSwipe.active) {
+      // viewAngle をプレイヤーの向きへゆっくり遅延追従
+      if (!keys.has('KeyQ') && !keys.has('KeyE') && !lookSwipe.active) {
         let camDiff = player.rotation.y - viewAngle;
         while (camDiff >  Math.PI) camDiff -= 2 * Math.PI;
         while (camDiff < -Math.PI) camDiff += 2 * Math.PI;
@@ -1434,13 +1419,6 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
 
 // ▼ アクションボタン（右半分）
 (function setupActionBtns() {
-  // スプリントボタン（押してる間 Shift 扱い）
-  const sprintBtn = document.getElementById('btn-sprint');
-  if (sprintBtn) {
-    sprintBtn.addEventListener('touchstart', e => { e.preventDefault(); keys.add('ShiftLeft'); },   { passive: false });
-    sprintBtn.addEventListener('touchend',   e => { e.preventDefault(); keys.delete('ShiftLeft'); }, { passive: false });
-    sprintBtn.addEventListener('touchcancel',() => keys.delete('ShiftLeft'));
-  }
 
   // キックボタン（ジョイスティック傾き量でpower決定: 弱押し=弱シュート, フル=強シュート）
   function setupKickBtn(id, lofted, curve) {
