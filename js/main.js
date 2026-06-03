@@ -478,6 +478,16 @@ function updateLocalPlayerBall(dt) {
 
   if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
 
+  const remoteRoleLocal = mpRole === 'host' ? 'guest' : 'host';
+
+  // ── 競合解決: Firebase が相手の所有を確認したら即座に譲る ──────────
+  if (isMultiplayer && mpRemoteBallOwner === remoteRoleLocal && ballOwner === 'player') {
+    ballOwner = 'none';
+    playerPickupCooldown = 0.25;
+    isDribbling = false;
+    return;
+  }
+
   const distPlayer = new THREE.Vector3()
     .subVectors(ballMesh.position, player.position).setY(0).length();
 
@@ -494,12 +504,19 @@ function updateLocalPlayerBall(dt) {
     isTackling = false;
   }
 
-  // 通常拾得: 誰も保持していない時のみ
-  const remoteRoleLocal = mpRole === 'host' ? 'guest' : 'host';
+  // 通常拾得: 相手が持っていない時のみ
   const canPickup = !isMultiplayer || mpRemoteBallOwner !== remoteRoleLocal;
   if (ballOwner === 'none' && canPickup) {
-    if (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0)
+    if (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) {
       ballOwner = 'player';
+      // 即座にパブリッシュして相手に所有権を通知（33ms タイマー待ちなし）
+      if (isMultiplayer && mpHandlers && gameStarted) {
+        mpHandlers.publishBall({
+          x: ballMesh.position.x, y: ballMesh.position.y, z: ballMesh.position.z,
+          vx: 0, vy: 0, vz: 0, owner: mpRole,
+        });
+      }
+    }
   }
 
   isDribbling = ballOwner === 'player';
@@ -1066,7 +1083,31 @@ function onCoreLoaded() {
 
 // ゲーム開始（lobby.jsからimportされる）
 export function startGame(config) {
-  // フィールドサイズ設定
+  // ── 前ゲームの残骸を全てクリア ────────────────────────────────────
+  // player の旧キャラ削除
+  while (player.children.length > 0) player.remove(player.children[0]);
+  // remotePeer の旧キャラ削除
+  while (remotePeer.children.length > 0) remotePeer.remove(remotePeer.children[0]);
+  scene.remove(remotePeer);
+  remotePeerMixer = null; remotePeerClipAct = {};
+  // teammate / enemy を scene から除去（CPU戦の残骸防止）
+  scene.remove(teammate);
+  scene.remove(enemy);
+  while (teammate.children.length > 0) teammate.remove(teammate.children[0]);
+  while (enemy.children.length > 0) enemy.remove(enemy.children[0]);
+  // カウンタとゲーム状態リセット
+  CORE_TOTAL = 1 + ANIM_FILES.length;
+  coreReady  = 0;
+  gameStarted = false;
+  isMultiplayer = false; mpRole = null; mpHandlers = null;
+  mpTimer = 0; mpRemoteBallOwner = 'none'; mpGoalScorer = null; lastGoalSeq = 0;
+  peerBuf.length = 0; ballBuf.length = 0;
+  ballOwner = 'none'; isDribbling = false;
+  playerScore = 0; cpuScore = 0; updateScoreDisplay();
+  isGoalScene = false;
+  if (gameWatcher) { gameWatcher(); gameWatcher = null; }
+
+  // ── フィールドサイズ設定 ──────────────────────────────────────────
   const FIELD_PRESETS = {
     full:    { halfW: 51, halfD: 34 },
     medium:  { halfW: 35, halfD: 25 },
@@ -1368,21 +1409,21 @@ function animate() {
   const remoteRole = mpRole === 'host' ? 'guest' : 'host';
   const remoteOwns = isMultiplayer && mpRemoteBallOwner === remoteRole;
 
-  if (remoteOwns && ballOwner !== 'player') {
-    // 相手保持中: 最新受信位置を直接適用してブロック
+  if (isMultiplayer && remoteOwns) {
+    // 相手がボール保持 → 最新受信位置を直接適用（遅延なし）
     const bs = ballBuf.length > 0 ? ballBuf[ballBuf.length - 1] : null;
-    if (bs) {
+    if (bs && ballOwner !== 'player') {
       ballMesh.position.set(bs.x, bs.y, bs.z);
       ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
+      ballOwner = 'enemy';
     }
-    ballOwner = 'enemy';
-    // タックル奪取は可能 → ローカル操作を実行
-    updateLocalPlayerBall(dt);
+    updateLocalPlayerBall(dt); // タックル奪取チェック（競合解決も含む）
   } else if (!isMultiplayer || mpRole === 'host') {
-    // ソロ or Host通常: 全物理（プレイヤー拾得含む）
+    // ソロ or Host（誰もボールを持っていない or 自分が持っている）
     updateBall(dt);
+    // Host が自分でボールを持った場合の即時通知は mpTimer 送信で対応
   } else {
-    // Guest: Firebase からボール位置を受け取りローカル操作を実行
+    // Guest: Hostの物理結果を受け取りつつローカル操作
     if (ballOwner !== 'player') {
       const bs = interpBuf(ballBuf, Date.now() - 50);
       if (bs) {
@@ -1392,9 +1433,9 @@ function animate() {
         ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
       }
     }
-    updateLocalPlayerBall(dt); // 拾得・タックル・ドリブルをGuestでも実行
+    updateLocalPlayerBall(dt);
   }
-  // 相手がもうボールを持っていなければ 'enemy' を解放
+  // 相手がボールを手放した → 'enemy' を解放
   if (isMultiplayer && ballOwner === 'enemy' && !remoteOwns) ballOwner = 'none';
 
   if (!isMultiplayer) {
