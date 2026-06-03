@@ -772,55 +772,36 @@ function updateGK(gkChar, gkSt, myGoalX, teammateChar, ownerKey, dt) {
   // ── スロー/セーブアニメ再生中 ────────────────────────────────────
   if (gkSt.state === 'throw' || gkSt.state === 'save' || gkSt.state === 'dive') return;
 
-  // ── ボール軌道予測 ───────────────────────────────────────────────
-  const ballHeadsThisWay = myGoalX > 0
-    ? (ballVel.x > 1.0 && ballMesh.position.x < myGoalX - 3)
-    : (ballVel.x < -1.0 && ballMesh.position.x > myGoalX + 3);
+  // ── 待機（棒立ち）：ゴール中央に立ち、ボールへ体を向ける ────────────
+  gkSt.state = 'patrol';
+  // ダイブ後など中央からずれていれば静かに戻る（通常は動かず棒立ち）
+  const moved = gkMoveTo(gkChar, new THREE.Vector3(standX, 0, 0), dt);
+  charAnim(gkChar, moved ? 'gk_sidestep' : 'idle');
 
-  let predictedZ = gkPos.z;
-  let predictedY = 1.0;
-  let ttg        = 999;
-
-  if (ballHeadsThisWay && Math.abs(ballVel.x) > 0.1) {
-    ttg = (myGoalX - ballMesh.position.x) / ballVel.x;
-    if (ttg > 0 && ttg < 6) {
-      predictedZ = ballMesh.position.z + ballVel.z * ttg;
-      predictedY = ballMesh.position.y + ballVel.y * ttg
-                   - 0.5 * BALL_GRAVITY * ttg * ttg;
-    }
-  }
-
-  const threatensGoal = ballHeadsThisWay
-    && Math.abs(predictedZ) < GOAL_HALF_Z + 1.5
-    && predictedY > -0.3 && predictedY < 3.5
-    && ttg < 5;
-
-  if (threatensGoal) {
-    gkSt.state = 'react';
-    const tgtZ   = Math.max(-GOAL_HALF_Z, Math.min(GOAL_HALF_Z, predictedZ));
-    const tgtPos = new THREE.Vector3(standX, 0, tgtZ);
-    const moved  = gkMoveTo(gkChar, tgtPos, dt);
-
-    // ボールがセーブゾーンに入ったら試みる
-    const inSaveX = myGoalX > 0
-      ? (ballMesh.position.x > myGoalX - 4.5 && ballMesh.position.x < myGoalX + 0.5)
-      : (ballMesh.position.x < myGoalX + 4.5 && ballMesh.position.x > myGoalX - 0.5);
-    const inSaveZ = Math.abs(ballMesh.position.z - gkPos.z) < GK_CATCH_REACH;
-    const inSaveY = ballMesh.position.y < 3.0;
-
-    if (inSaveX && inSaveZ && inSaveY && ballOwner === 'none') {
-      gkAttemptSave(gkChar, gkSt, myGoalX, ownerKey);
-    } else {
-      charAnim(gkChar, moved ? 'gk_sidestep' : 'idle');
+  // ボールがハーフラインを超えて自陣に来たらボールへ正対する。
+  // 自陣にボールが無いときはフィールド正面を向く。
+  const ballInOwnHalf = Math.sign(ballMesh.position.x) === Math.sign(myGoalX)
+                        && Math.abs(ballMesh.position.x) > 0.5;
+  if (ballInOwnHalf) {
+    const toBall = new THREE.Vector3().subVectors(ballMesh.position, gkPos).setY(0);
+    if (toBall.lengthSq() > 0.01) {
+      toBall.normalize();
+      gkChar.group.rotation.y = Math.atan2(-toBall.x, -toBall.z);
     }
   } else {
-    // ── パトロール ─────────────────────────────────────────────────
-    gkSt.state = 'patrol';
-    gkSt.patrolPhase += dt * 0.7;
-    const patrolZ   = Math.sin(gkSt.patrolPhase) * GK_PATROL_Z;
-    const patrolPos = new THREE.Vector3(standX, 0, patrolZ);
-    const moved     = gkMoveTo(gkChar, patrolPos, dt);
-    charAnim(gkChar, moved ? 'gk_sidestep' : 'idle');
+    gkChar.group.rotation.y = myGoalX > 0 ? Math.PI / 2 : -Math.PI / 2;
+  }
+
+  // ── 反射セーブ：棒立ちのまま、手の届く範囲にシュートが来たら
+  //    キャッチ（正面）/ ダイブ（左右）を試みる ──────────────────────
+  const inSaveX = myGoalX > 0
+    ? (ballMesh.position.x > myGoalX - 4.5 && ballMesh.position.x < myGoalX + 0.5)
+    : (ballMesh.position.x < myGoalX + 4.5 && ballMesh.position.x > myGoalX - 0.5);
+  const inSaveZ = Math.abs(ballMesh.position.z - gkPos.z) < GK_CATCH_REACH;
+  const inSaveY = ballMesh.position.y < 3.0;
+  const ballComingIn = myGoalX > 0 ? ballVel.x > 1.0 : ballVel.x < -1.0;
+  if (inSaveX && inSaveZ && inSaveY && ballComingIn && ballOwner === 'none') {
+    gkAttemptSave(gkChar, gkSt, myGoalX, ownerKey);
   }
 
   gkClampToGoalArea(gkChar, myGoalX);
