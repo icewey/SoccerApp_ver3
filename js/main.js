@@ -856,9 +856,9 @@ let mpHandlers        = null;
 let remotePeer        = new THREE.Group();
 let remotePeerMixer   = null;
 let remotePeerClipAct = {};
-let remoteBallState   = null;
-let mpTimer           = 0;
-let gameWatcher       = null;
+let mpTimer              = 0;
+let gameWatcher          = null;
+let mpRemoteBallOwner    = 'none'; // 'host' | 'guest' | 'none'  Firebase上の所有者
 
 // エンティティ補間バッファ（受信スナップショットをタイムスタンプ付きで保持）
 const INTERP_DELAY    = 120;   // ms: この分だけ過去を描画してスムーズに補間
@@ -921,8 +921,11 @@ function onCoreLoaded() {
       // ゲーム状態を Firebase で監視開始
       gameWatcher = mpHandlers.watchGame(data => {
         const remote = mpRole === 'host' ? data?.guest : data?.host;
-        if (remote) pushPeerBuf(remote);          // バッファに積む
-        if (data?.ball) pushBallBuf(data.ball);  // バッファに積む
+        if (remote) pushPeerBuf(remote);
+        if (data?.ball) {
+          pushBallBuf(data.ball);
+          mpRemoteBallOwner = data.ball.owner ?? 'none';
+        }
         if (data?.score && mpRole === 'guest') {
           playerScore = data.score.guest ?? 0;
           cpuScore    = data.score.host  ?? 0;
@@ -1238,19 +1241,34 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   if (mixer) mixer.update(dt);
 
-  if (!isMultiplayer || mpRole === 'host') {
-    updateBall(dt);
-  } else if (isMultiplayer && mpRole === 'guest') {
-    // Guest: 補間済みボール位置を適用（自分がボール保持中は除く）
+  // ── ボール更新 ───────────────────────────────────────────────────
+  const remoteRole = mpRole === 'host' ? 'guest' : 'host';
+  const remoteOwns = isMultiplayer && mpRemoteBallOwner === remoteRole;
+
+  if (remoteOwns && ballOwner !== 'player') {
+    // 相手がボールを保持中 → 最新受信位置を直接適用
+    const bs = ballBuf.length > 0 ? ballBuf[ballBuf.length - 1] : null;
+    if (bs) {
+      ballMesh.position.set(bs.x, bs.y, bs.z);
+      ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
+    }
+    ballOwner = 'enemy'; // ローカルの拾得をブロック
+  } else if (!isMultiplayer || mpRole === 'host') {
+    updateBall(dt);      // ホスト or ソロ: 通常物理
+  } else {
+    // Guest かつ相手がボールを持っていない場合: Hostの物理を受け取る
     if (ballOwner !== 'player') {
-      const renderTime = Date.now() - INTERP_DELAY;
-      const bs = interpBuf(ballBuf, renderTime);
+      const bs = interpBuf(ballBuf, Date.now() - 50); // 低遅延で適用
       if (bs) {
-        ballMesh.position.set(bs.x, bs.y, bs.z);
+        ballMesh.position.x += (bs.x - ballMesh.position.x) * Math.min(1, 20 * dt);
+        ballMesh.position.y += (bs.y - ballMesh.position.y) * Math.min(1, 20 * dt);
+        ballMesh.position.z += (bs.z - ballMesh.position.z) * Math.min(1, 20 * dt);
         ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
       }
     }
   }
+  // 'enemy' を継続チェック: 相手がもうボールを持っていなければ解放
+  if (isMultiplayer && ballOwner === 'enemy' && !remoteOwns) ballOwner = 'none';
 
   if (!isMultiplayer) {
     updateTeammate(dt);
@@ -1278,11 +1296,16 @@ function animate() {
         x: player.position.x, z: player.position.z,
         ry: player.rotation.y, anim: getDesiredAnim() || 'idle',
       });
-      if (mpRole === 'host') {
+      // ボール送信: 自分が持っているか、Hostなら常に送信（ルーズボール物理の権威）
+      const shouldPubBall = ballOwner === 'player' || mpRole === 'host';
+      if (shouldPubBall) {
         mpHandlers.publishBall({
           x: ballMesh.position.x, y: ballMesh.position.y, z: ballMesh.position.z,
           vx: ballVel.x, vy: ballVel.y, vz: ballVel.z,
+          owner: ballOwner === 'player' ? mpRole : 'none', // 誰が持っているか
         });
+      }
+      if (mpRole === 'host') {
         mpHandlers.publishScore({ host: playerScore, guest: cpuScore });
       }
     }
