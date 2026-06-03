@@ -165,6 +165,28 @@ const ENEMY_TACKLE_COOLDOWN  = 2.5;
 // ── ボール所有権 ───────────────────────────────────────────────────────────
 let ballOwner = 'none'; // 'player' | 'enemy' | 'none'
 let playerPickupCooldown = 0; // キック直後に自分がボールを即再拾いするのを防ぐ(秒)
+let gkBallHolder = 'none'; // 'none' | 'player_gk' | 'enemy_gk'
+let gkSessionId  = 0;     // ゲーム再起動時のstale setTimeoutを無効化するカウンタ
+
+// ── ゴールキーパー ──────────────────────────────────────────────────────────
+const playerGKGroup = new THREE.Group();
+const enemyGKGroup  = new THREE.Group();
+let playerGKMixer   = null;
+let playerGKCurrent = null;
+let enemyGKMixer    = null;
+let enemyGKCurrent  = null;
+const playerGKChar  = { group: playerGKGroup, animState: null };
+const enemyGKChar   = { group: enemyGKGroup,  animState: null };
+const pGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0 };
+const eGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0 };
+
+const GK_SPEED        = 9.0;
+const GK_X_OFFSET     = 2.0;
+const GK_PATROL_Z     = 2.5;
+const GK_CATCH_REACH  = 2.2;
+const GK_CATCH_CHANCE = 0.50;
+const GK_HOLD_TIME    = 1.5;
+const GK_DIVE_Z_THR   = 1.5;
 
 // ── プニコン（仮想スティック）─────────────────────────────────────────────
 const joystick = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
@@ -298,7 +320,8 @@ function updateEnemy(dt) {
   const distToBall = new THREE.Vector3().subVectors(ballMesh.position, enemy.position).setY(0).length();
 
   // タックルによる奪取（プレイヤーと同じ TACKLE_DIST を使用）
-  if (enemyTackling && ballOwner !== 'enemy' && distToBall < TACKLE_DIST && enemyPickupCooldown <= 0 && !isKicking) {
+  if (enemyTackling && ballOwner !== 'enemy' && distToBall < TACKLE_DIST
+      && enemyPickupCooldown <= 0 && !isKicking && gkBallHolder === 'none') {
     ballOwner = 'enemy';
     playerPickupCooldown = 0.6;
     enemyTackling = false;
@@ -357,7 +380,7 @@ function updateEnemy(dt) {
 // ローカルプレイヤーのボール操作（拾得・タックル・ドリブル）
 // マルチプレイでも常に呼ぶ。物理シミュとゴール判定は含まない。
 function updateLocalPlayerBall(dt) {
-  if (!gameStarted || isGoalScene) return;
+  if (!gameStarted || isGoalScene || gkBallHolder !== 'none') return;
 
   if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
 
@@ -409,6 +432,7 @@ function updateLocalPlayerBall(dt) {
 function updateBall(dt) {
   if (!gameStarted) return;
   if (isGoalScene) return; // ゴールシーン中は物理停止
+  if (gkBallHolder !== 'none') { isDribbling = false; return; }
 
   const toPlayer   = new THREE.Vector3().subVectors(ballMesh.position, player.position);
   toPlayer.y = 0;
@@ -602,6 +626,16 @@ const enemyAnim = {
   get mixer()   { return enemyMixer; },   set mixer(v)   { enemyMixer = v; },
   get current() { return enemyCurrent; }, set current(v) { enemyCurrent = v; },
 };
+const playerGKAnim = {
+  get mixer()   { return playerGKMixer; },   set mixer(v)   { playerGKMixer = v; },
+  get current() { return playerGKCurrent; }, set current(v) { playerGKCurrent = v; },
+};
+const enemyGKAnim = {
+  get mixer()   { return enemyGKMixer; },   set mixer(v)   { enemyGKMixer = v; },
+  get current() { return enemyGKCurrent; }, set current(v) { enemyGKCurrent = v; },
+};
+playerGKChar.animState = playerGKAnim;
+enemyGKChar.animState  = enemyGKAnim;
 
 // ── 共通アニメーション切り替え ────────────────────────────────────────────
 function fadeToMixerClip(anim, name, loop = true) {
@@ -642,6 +676,158 @@ function cpuShoot({ ownerKey, goalX, anim, getKicking, setKicking, onDone }) {
 // 後方互換ラッパー（charAnim に委譲）
 function fadeToClip(name, loop = true)      { charAnim(playerChar, name, loop); }
 function fadeToEnemyClip(name, loop = true) { charAnim(enemyChar,  name, loop); }
+
+// ── ゴールキーパー専用関数 ────────────────────────────────────────────────
+
+function gkMoveTo(char, targetPos, dt) {
+  const to = new THREE.Vector3().subVectors(targetPos, char.group.position).setY(0);
+  const dist = to.length();
+  if (dist < 0.25) return false;
+  to.divideScalar(dist);
+  char.group.position.addScaledVector(to, Math.min(dist, GK_SPEED * dt));
+  char.group.rotation.y = Math.atan2(-to.x, -to.z);
+  return true;
+}
+
+function gkClampToGoalArea(char, myGoalX) {
+  const standX = myGoalX > 0 ? myGoalX - GK_X_OFFSET : myGoalX + GK_X_OFFSET;
+  char.group.position.x = Math.max(standX - 1.0, Math.min(standX + 1.0, char.group.position.x));
+  char.group.position.z = Math.max(-(GOAL_HALF_Z + 1.5), Math.min(GOAL_HALF_Z + 1.5, char.group.position.z));
+}
+
+function gkAttemptSave(gkChar, gkSt, myGoalX, ownerKey) {
+  if (gkSt.state === 'save' || gkSt.state === 'dive') return;
+  const deltaZ = ballMesh.position.z - gkChar.group.position.z;
+  const useDive = Math.abs(deltaZ) > GK_DIVE_Z_THR;
+  gkSt.state = useDive ? 'dive' : 'save';
+  charAnim(gkChar, useDive ? 'gk_dive' : 'gk_catch', false);
+
+  const success    = Math.random() < GK_CATCH_CHANCE;
+  const animKey    = useDive ? 'gk_dive' : 'gk_catch';
+  const triggerMs  = clips[animKey] ? clips[animKey].duration * 0.5 * 1000 : 500;
+  const sessionSnap = gkSessionId; // stale-closure 対策
+
+  setTimeout(() => {
+    if (isGoalScene || gkSessionId !== sessionSnap) return;
+    if (gkSt.state !== 'save' && gkSt.state !== 'dive') return;
+    if (success) {
+      gkBallHolder  = ownerKey;
+      ballOwner     = 'none';
+      ballVel.set(0, 0, 0);
+      ballCurveRate = 0;
+      gkSt.state    = 'hold';
+      gkSt.holdTimer = GK_HOLD_TIME;
+    } else {
+      gkSt.state = 'patrol';
+    }
+  }, triggerMs);
+}
+
+function gkDoThrow(gkChar, gkSt, teammateChar, ownerKey, myGoalX) {
+  charAnim(gkChar, 'gk_throw', false);
+  const triggerMs = clips['gk_throw'] ? clips['gk_throw'].duration * 0.45 * 1000 : 480;
+  setTimeout(() => {
+    if (gkBallHolder !== ownerKey) return;
+    const from = gkChar.group.position.clone();
+    const to   = teammateChar.group.position.clone();
+    const dir  = new THREE.Vector3().subVectors(to, from).setY(0);
+    const dist = dir.length();
+    if (dist < 0.1) { gkBallHolder = 'none'; gkSt.state = 'patrol'; return; }
+    dir.divideScalar(dist);
+    const hSpd = Math.min(22, Math.max(12, dist * 0.85));
+    const vSpd = Math.max(8,  Math.min(16, dist * 0.55));
+    // ゴールラインから離れた位置からボールをリリース（ゴール判定を防ぐ）
+    const safeOffset = myGoalX > 0 ? -3.0 : 3.0;
+    ballMesh.position.set(from.x + safeOffset, from.y + 1.4, from.z);
+    ballVel.set(dir.x * hSpd, vSpd, dir.z * hSpd);
+    ballCurveRate = 0;
+    ballOwner     = 'none';
+    gkBallHolder  = 'none';
+    if (ownerKey === 'player_gk') playerPickupCooldown = 0;
+    else                          enemyPickupCooldown  = 0;
+  }, triggerMs);
+  const totalMs = clips['gk_throw'] ? clips['gk_throw'].duration * 1000 : 1100;
+  setTimeout(() => { if (gkSt.state === 'throw') gkSt.state = 'patrol'; }, totalMs);
+}
+
+function updateGK(gkChar, gkSt, myGoalX, teammateChar, ownerKey, dt) {
+  if (!gameStarted || !gkChar.animState?.mixer || isGoalScene) return;
+  gkChar.animState.mixer.update(dt);
+
+  const gkPos  = gkChar.group.position;
+  const standX = myGoalX > 0 ? myGoalX - GK_X_OFFSET : myGoalX + GK_X_OFFSET;
+
+  // ── ボール保持中 ──────────────────────────────────────────────────
+  if (gkSt.state === 'hold') {
+    ballMesh.position.set(gkPos.x, gkPos.y + 1.2, gkPos.z);
+    ballVel.set(0, 0, 0);
+    ballCurveRate = 0;
+    charAnim(gkChar, 'idle');
+    gkSt.holdTimer -= dt;
+    if (gkSt.holdTimer <= 0) {
+      gkSt.state = 'throw';
+      gkDoThrow(gkChar, gkSt, teammateChar, ownerKey, myGoalX);
+    }
+    return;
+  }
+
+  // ── スロー/セーブアニメ再生中 ────────────────────────────────────
+  if (gkSt.state === 'throw' || gkSt.state === 'save' || gkSt.state === 'dive') return;
+
+  // ── ボール軌道予測 ───────────────────────────────────────────────
+  const ballHeadsThisWay = myGoalX > 0
+    ? (ballVel.x > 1.0 && ballMesh.position.x < myGoalX - 3)
+    : (ballVel.x < -1.0 && ballMesh.position.x > myGoalX + 3);
+
+  let predictedZ = gkPos.z;
+  let predictedY = 1.0;
+  let ttg        = 999;
+
+  if (ballHeadsThisWay && Math.abs(ballVel.x) > 0.1) {
+    ttg = (myGoalX - ballMesh.position.x) / ballVel.x;
+    if (ttg > 0 && ttg < 6) {
+      predictedZ = ballMesh.position.z + ballVel.z * ttg;
+      predictedY = ballMesh.position.y + ballVel.y * ttg
+                   - 0.5 * BALL_GRAVITY * ttg * ttg;
+    }
+  }
+
+  const threatensGoal = ballHeadsThisWay
+    && Math.abs(predictedZ) < GOAL_HALF_Z + 1.5
+    && predictedY > -0.3 && predictedY < 3.5
+    && ttg < 5;
+
+  if (threatensGoal) {
+    gkSt.state = 'react';
+    const tgtZ   = Math.max(-GOAL_HALF_Z, Math.min(GOAL_HALF_Z, predictedZ));
+    const tgtPos = new THREE.Vector3(standX, 0, tgtZ);
+    const moved  = gkMoveTo(gkChar, tgtPos, dt);
+
+    // ボールがセーブゾーンに入ったら試みる
+    const inSaveX = myGoalX > 0
+      ? (ballMesh.position.x > myGoalX - 4.5 && ballMesh.position.x < myGoalX + 0.5)
+      : (ballMesh.position.x < myGoalX + 4.5 && ballMesh.position.x > myGoalX - 0.5);
+    const inSaveZ = Math.abs(ballMesh.position.z - gkPos.z) < GK_CATCH_REACH;
+    const inSaveY = ballMesh.position.y < 3.0;
+
+    if (inSaveX && inSaveZ && inSaveY && ballOwner === 'none') {
+      gkAttemptSave(gkChar, gkSt, myGoalX, ownerKey);
+    } else {
+      charAnim(gkChar, moved ? 'gk_sidestep' : 'idle');
+    }
+  } else {
+    // ── パトロール ─────────────────────────────────────────────────
+    gkSt.state = 'patrol';
+    gkSt.patrolPhase += dt * 0.7;
+    const patrolZ   = Math.sin(gkSt.patrolPhase) * GK_PATROL_Z;
+    const patrolPos = new THREE.Vector3(standX, 0, patrolZ);
+    const moved     = gkMoveTo(gkChar, patrolPos, dt);
+    charAnim(gkChar, moved ? 'gk_sidestep' : 'idle');
+  }
+
+  gkClampToGoalArea(gkChar, myGoalX);
+}
+
 
 // ── Loading ───────────────────────────────────────────────────────────────
 const loadingEl  = document.getElementById('loading');
@@ -723,10 +909,24 @@ function resetAfterGoal() {
   ballMesh.position.set(0, BALL_R, 0);
   ballVel.set(0, 0, 0);
   ballCurveRate = 0;
-  ballOwner = 'none';
-  isDribbling = false;
+  ballOwner    = 'none';
+  gkBallHolder = 'none';
+  isDribbling  = false;
   isKicking = isPassing = isTackling = isSpinning = false;
   playerPickupCooldown = 0;
+
+  pGKSt.state = 'patrol'; pGKSt.holdTimer = 0;
+  eGKSt.state = 'patrol'; eGKSt.holdTimer = 0;
+  if (playerGKChar.group) {
+    playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), groundY, 0);
+    if (playerGKMixer) { playerGKMixer.stopAllAction(); playerGKCurrent = null; }
+    charAnim(playerGKChar, 'idle');
+  }
+  if (enemyGKChar.group) {
+    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, groundY, 0);
+    if (enemyGKMixer) { enemyGKMixer.stopAllAction(); enemyGKCurrent = null; }
+    charAnim(enemyGKChar, 'idle');
+  }
 
   player.position.set(0, groundY, 0);
   player.rotation.y = 0;
@@ -782,7 +982,11 @@ const ANIM_FILES = [
   ['dribble', './animations/Dribble.fbx'],
   ['pass',    './animations/Pass.fbx'],
   ['tackle',  './animations/Tackle.fbx'],
-  ['spin',    './animations/Spin.fbx'],
+  ['spin',       './animations/Spin.fbx'],
+  ['gk_sidestep','./animations/Goalkeeper Sidestep.fbx'],
+  ['gk_catch',   './animations/Goalkeeper Catch.fbx'],
+  ['gk_dive',    './animations/Goalkeeper Diving Save.fbx'],
+  ['gk_throw',   './animations/Goalkeeper Overhand Throw.fbx'],
 ];
 let CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ（敵追加時はstartGame内で+1）
 let coreReady = 0;
@@ -856,6 +1060,16 @@ function onCoreLoaded() {
   loadingBar.style.width = pct + '%';
   if (coreReady === CORE_TOTAL) {
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
+    if (playerGKChar.animState?.mixer) {
+      playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), groundY, 0);
+      playerGKChar.group.visible = true;
+      charAnim(playerGKChar, 'idle');
+    }
+    if (enemyGKChar.animState?.mixer) {
+      enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, groundY, 0);
+      enemyGKChar.group.visible = true;
+      charAnim(enemyGKChar, 'idle');
+    }
     if (isMultiplayer) {
       remotePeer.position.y = groundY;
       remotePeer.visible = true;
@@ -913,6 +1127,13 @@ export function startGame(config) {
   // enemy を scene から除去（CPU戦の残骸防止）
   scene.remove(enemy);
   while (enemy.children.length > 0) enemy.remove(enemy.children[0]);
+  // GK を scene から除去
+  scene.remove(playerGKGroup);
+  while (playerGKGroup.children.length > 0) playerGKGroup.remove(playerGKGroup.children[0]);
+  playerGKMixer = null; playerGKCurrent = null; playerGKChar.animState = playerGKAnim;
+  scene.remove(enemyGKGroup);
+  while (enemyGKGroup.children.length > 0) enemyGKGroup.remove(enemyGKGroup.children[0]);
+  enemyGKMixer = null; enemyGKCurrent = null; enemyGKChar.animState = enemyGKAnim;
   // カウンタとゲーム状態リセット
   CORE_TOTAL = 1 + ANIM_FILES.length;
   coreReady  = 0;
@@ -920,7 +1141,10 @@ export function startGame(config) {
   isMultiplayer = false; mpRole = null; mpHandlers = null;
   mpTimer = 0; mpRemoteBallOwner = 'none'; mpGoalScorer = null; lastGoalSeq = 0;
   peerBuf.length = 0; ballBuf.length = 0;
-  ballOwner = 'none'; isDribbling = false;
+  ballOwner = 'none'; gkBallHolder = 'none'; isDribbling = false;
+  gkSessionId++;
+  pGKSt.state = 'patrol'; pGKSt.holdTimer = 0; pGKSt.patrolPhase = 0;
+  eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.patrolPhase = 0;
   playerScore = 0; cpuScore = 0; updateScoreDisplay();
   isGoalScene = false;
   if (gameWatcher) { gameWatcher(); gameWatcher = null; }
@@ -1081,6 +1305,54 @@ export function startGame(config) {
     );
   }
 
+  // ゴールキーパーロード（ソロモードのみ、両チーム固定キャラ）
+  if (!config.mp) {
+    CORE_TOTAL += 2;
+    const GK_FBX_PATH = './キャラ/我牙丸吟的なキャラ（ゴールキーパー）/T-Pose.fbx';
+
+    function loadOneGK(gkGroup, gkChar, gkAnimProxy, tintColor, gkSt) {
+      loader.load(GK_FBX_PATH, fbx => {
+        fbx.scale.setScalar(0.01);
+        fbx.rotation.y = Math.PI;
+        fbx.traverse(c => {
+          if (c.isMesh) {
+            c.castShadow = c.receiveShadow = true;
+            if (tintColor) {
+              c.material = Array.isArray(c.material)
+                ? c.material.map(m => { const mc = m.clone(); mc.color.set(tintColor); return mc; })
+                : (() => { const mc = c.material.clone(); mc.color.set(tintColor); return mc; })();
+            } else {
+              const mats = Array.isArray(c.material) ? c.material : [c.material];
+              mats.forEach(m => { if (m.map) m.map.colorSpace = THREE.SRGBColorSpace; });
+            }
+          }
+        });
+        gkGroup.add(fbx);
+        gkGroup.visible = false;
+        scene.add(gkGroup);
+        const newMixer = new THREE.AnimationMixer(fbx);
+        gkAnimProxy.mixer  = newMixer;
+        gkChar.animState   = gkAnimProxy;
+        gkChar.group       = gkGroup;
+        newMixer.addEventListener('finished', e => {
+          if ((gkSt.state === 'save' || gkSt.state === 'dive')
+              && ((clips['gk_catch'] && e.action === newMixer.clipAction(clips['gk_catch']))
+               || (clips['gk_dive']  && e.action === newMixer.clipAction(clips['gk_dive'])))) {
+            if (gkSt.state !== 'hold') gkSt.state = 'patrol';
+          }
+          if (gkSt.state === 'throw' && clips['gk_throw']
+              && e.action === newMixer.clipAction(clips['gk_throw'])) {
+            gkSt.state = 'patrol';
+          }
+        });
+        onCoreLoaded();
+      }, undefined, () => onCoreLoaded());
+    }
+
+    loadOneGK(playerGKGroup, playerGKChar, playerGKAnim, null,     pGKSt);
+    loadOneGK(enemyGKGroup,  enemyGKChar,  enemyGKAnim,  0xff4444, eGKSt);
+  }
+
   // 全アニメを並列ロード
   ANIM_FILES.forEach(([name, path]) => {
     loader.load(path, fbx => {
@@ -1233,6 +1505,8 @@ function animate() {
 
   if (!isMultiplayer) {
     updateEnemy(dt);
+    updateGK(playerGKChar, pGKSt, -GOAL_X, playerChar, 'player_gk', dt);
+    if (hasEnemy) updateGK(enemyGKChar, eGKSt, GOAL_X, enemyChar, 'enemy_gk', dt);
   } else if (gameStarted) {
     // リモートプレイヤーをバッファから補間して描画
     if (remotePeerMixer) {
