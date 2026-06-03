@@ -160,9 +160,6 @@ let enemyKicking  = false;
 let enemyPickupCooldown = 0;
 let enemyTackleCooldown = 0;
 let hasEnemy = false;
-const ENEMY_SPEED            = 5.5;
-const ENEMY_RUN_SPEED        = 9.5;
-const ENEMY_TACKLE_RANGE     = 1.8;
 const ENEMY_TACKLE_COOLDOWN  = 2.5;
 
 // ── ボール所有権 ───────────────────────────────────────────────────────────
@@ -209,99 +206,151 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
   ballOwner   = 'none';
 }
 
-// ── 敵シュート ────────────────────────────────────────────────────────────
+// ── 敵シュート（charShoot を使用）────────────────────────────────────────
 function enemyShoot() {
-  cpuShoot({
-    ownerKey:   'enemy',
-    goalX:      -GOAL_X,
-    anim:       enemyAnim,
-    getKicking: () => enemyKicking,
-    setKicking: v => { enemyKicking = v; },
-    onDone:     () => { enemyPickupCooldown = 1.5; enemyState = 'chase'; },
-  });
+  charShoot(
+    enemyChar, 'enemy', -GOAL_X,
+    () => enemyKicking,
+    v  => { enemyKicking = v; },
+    () => { enemyPickupCooldown = 1.5; enemyState = 'chase'; }
+  );
 }
 
-// ── 共通 CPU 移動（移動 + 方向スナップ、trueなら実際に移動した）──────────
-function cpuMove(entity, targetPos, speed, dt) {
-  const to = new THREE.Vector3().subVectors(targetPos, entity.position);
-  to.y = 0;
+// ════════════════════════════════════════════════════════════════
+// ── 共通キャラクター部品（プレイヤー・CPU 両方で使う）──────────
+// ════════════════════════════════════════════════════════════════
+
+// キャラエンティティ（group + アニメ状態を1つのオブジェクトに）
+// playerChar / enemyChar は startGame 後に mixer がセットされる
+const playerChar = { group: null, animState: null }; // startGame で初期化
+const enemyChar  = { group: null, animState: null };
+
+// アニメーション切り替え（プレイヤー・CPU 共通）
+function charAnim(char, name, loop = true) {
+  fadeToMixerClip(char.animState, name, loop);
+}
+
+// 目標位置へ移動 + 向き設定（プレイヤー・CPU 共通、同じ速度）
+function charMoveTo(char, targetPos, dt) {
+  const to = new THREE.Vector3().subVectors(targetPos, char.group.position).setY(0);
   const dist = to.length();
   if (dist < 0.4) return false;
-  to.divideScalar(dist); // normalize in-place
-  entity.position.addScaledVector(to, Math.min(dist, speed * dt));
-  entity.rotation.y = Math.atan2(-to.x, -to.z);
+  to.divideScalar(dist);
+  char.group.position.addScaledVector(to, Math.min(dist, RUN_SPEED * dt));
+  char.group.rotation.y = Math.atan2(-to.x, -to.z);
   return true;
 }
 
-// ── 敵AI ─────────────────────────────────────────────────────────────────
+// タックル中の前進（プレイヤー・CPU 共通）
+function charTackleForward(char, dt) {
+  const f = new THREE.Vector3(-Math.sin(char.group.rotation.y), 0, -Math.cos(char.group.rotation.y));
+  char.group.position.addScaledVector(f, RUN_SPEED * 1.3 * dt);
+}
+
+// ドリブル時のボール配置（プレイヤー・CPU 共通）
+function charDribble(char, dt) {
+  const facing = new THREE.Vector3(-Math.sin(char.group.rotation.y), 0, -Math.cos(char.group.rotation.y));
+  const target = char.group.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
+  target.y = BALL_R;
+  ballMesh.position.lerp(target, Math.min(1, 50 * dt));
+  ballVel.set(0, 0, 0);
+  ballCurveRate = 0;
+}
+
+// シュート（プレイヤー・CPU 共通）
+function charShoot(char, ownerKey, goalX, getKicking, setKicking, onDone) {
+  if (ballOwner !== ownerKey || getKicking()) return;
+  setKicking(true);
+  charAnim(char, 'kick', false);
+  const delay = clips['kick'] ? clips['kick'].duration * 0.55 * 1000 : 300;
+  setTimeout(() => {
+    if (ballOwner !== ownerKey) { setKicking(false); return; }
+    const aimZ   = (Math.random() - 0.5) * 5;
+    const goal   = new THREE.Vector3(goalX, 1.0, aimZ);
+    const toGoal = new THREE.Vector3().subVectors(goal, ballMesh.position).setY(0);
+    const dist   = toGoal.length();
+    const dir    = toGoal.normalize();
+    const hSpd   = Math.min(24, Math.max(14, dist * 1.1));
+    ballVel.set(dir.x * hSpd, dist > 18 ? 7 : 4, dir.z * hSpd);
+    ballCurveRate = 0;
+    ballOwner = 'none';
+    isDribbling = false;
+    onDone();
+  }, delay);
+}
+
+// フィールド内クランプ（プレイヤー・CPU 共通）
+function charClampToField(char) {
+  char.group.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, char.group.position.x));
+  char.group.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, char.group.position.z));
+}
+
+// タックル判定距離（共通）
+const TACKLE_DIST = 1.6;
+
+// ── 敵AI（共通部品で実装）────────────────────────────────────────────────
 function updateEnemy(dt) {
-  if (!hasEnemy || !gameStarted || !enemyMixer || isGoalScene) return;
-  enemyMixer.update(dt);
+  if (!hasEnemy || !gameStarted || !enemyChar.animState?.mixer || isGoalScene) return;
+  enemyChar.animState.mixer.update(dt);
 
   if (enemyTackleCooldown > 0) enemyTackleCooldown -= dt;
 
-  const toEnemyBall = new THREE.Vector3().subVectors(ballMesh.position, enemy.position);
-  toEnemyBall.y = 0;
-  const distEnemyBall = toEnemyBall.length();
+  const distToBall = new THREE.Vector3().subVectors(ballMesh.position, enemy.position).setY(0).length();
 
-  // タックルによる奪取
-  if (enemyTackling && ballOwner !== 'enemy' && distEnemyBall < ENEMY_TACKLE_RANGE && enemyPickupCooldown <= 0 && !isKicking) {
+  // タックルによる奪取（プレイヤーと同じ TACKLE_DIST を使用）
+  if (enemyTackling && ballOwner !== 'enemy' && distToBall < TACKLE_DIST && enemyPickupCooldown <= 0 && !isKicking) {
     ballOwner = 'enemy';
     playerPickupCooldown = 0.6;
     enemyTackling = false;
   }
 
   // 状態遷移
-  enemyState = (ballOwner === 'enemy') ? 'dribble' : 'chase';
+  enemyState = ballOwner === 'enemy' ? 'dribble' : 'chase';
 
   // 目標位置を決定
   let targetPos;
   if (enemyState === 'dribble') {
-    // 自陣ゴール方向へ中央に絞り込みながら進む
-    const aimZ = enemy.position.z * 0.4;
-    targetPos = new THREE.Vector3(Math.max(-(GOAL_X - 4.5), enemy.position.x - 8), 0, aimZ);
+    // ゴール方向へ進む（プレイヤーのドリブルと同じ方向感覚）
+    targetPos = new THREE.Vector3(
+      Math.max(-(GOAL_X - 4.5), enemy.position.x - 8),
+      0,
+      enemy.position.z * 0.4
+    );
   } else {
     // ボールを追う
-    targetPos = ballMesh.position.clone();
-    targetPos.y = 0;
-    // ボール保持者にタックル
-    if (ballOwner === 'player' &&
-        distEnemyBall < 3.0 && !enemyTackling && enemyTackleCooldown <= 0) {
+    targetPos = new THREE.Vector3(ballMesh.position.x, 0, ballMesh.position.z);
+    // タックル（プレイヤーと同じ距離で試みる）
+    if (ballOwner === 'player' && distToBall < 3.0 && !enemyTackling && enemyTackleCooldown <= 0) {
       enemyTackling = true;
       enemyTackleCooldown = ENEMY_TACKLE_COOLDOWN;
-      fadeToEnemyClip('tackle', false);
+      charAnim(enemyChar, 'tackle', false);
     }
   }
 
-  // 移動
-  const distToTarget = new THREE.Vector3().subVectors(targetPos, enemy.position).setY(0).length();
-  const enSpeed      = distToTarget > 4 ? ENEMY_RUN_SPEED : ENEMY_SPEED;
-  const moving       = !enemyTackling && !enemyKicking && cpuMove(enemy, targetPos, enSpeed, dt);
+  // 移動（charMoveTo = プレイヤーと同じ RUN_SPEED）
+  const moving = !enemyTackling && !enemyKicking && charMoveTo(enemyChar, targetPos, dt);
 
-  // タックル中は向いてる方向に前進
-  if (enemyTackling) {
-    const facing = new THREE.Vector3(-Math.sin(enemy.rotation.y), 0, -Math.cos(enemy.rotation.y));
-    enemy.position.addScaledVector(facing, ENEMY_SPEED * 1.3 * dt);
-  }
+  // タックル中の前進（charTackleForward = プレイヤーと同じ処理）
+  if (enemyTackling) charTackleForward(enemyChar, dt);
 
-  enemy.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, enemy.position.x));
-  enemy.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, enemy.position.z));
+  // フィールドクランプ（共通）
+  charClampToField(enemyChar);
 
-  // シュート判定: 自陣ペナルティエリア内で角度OK
-  const enemyPenZ = FIELD_HALF_D * 0.611;
+  // ドリブル中はボールを足元へ（charDribble = プレイヤーと同じ処理）
+  if (enemyState === 'dribble') charDribble(enemyChar, dt);
+
+  // シュート判定（プレイヤーと同じ距離・角度基準）
+  const penZ = FIELD_HALF_D * 0.611;
   if (ballOwner === 'enemy' && !enemyKicking
       && enemy.position.x < -(GOAL_X - FIELD_HALF_W * 0.48)
-      && Math.abs(enemy.position.z) <= enemyPenZ) {
-    const distToGoal = Math.abs(-GOAL_X - enemy.position.x);
-    const angleRatio = distToGoal > 0 ? Math.abs(enemy.position.z) / distToGoal : 0;
-    if (angleRatio <= 0.65 || distToGoal <= 8) enemyShoot();
+      && Math.abs(enemy.position.z) <= penZ) {
+    const distGoal = Math.abs(-GOAL_X - enemy.position.x);
+    if (Math.abs(enemy.position.z) / Math.max(distGoal, 0.1) <= 0.65 || distGoal <= 8) enemyShoot();
   }
 
-  // アニメーション
+  // アニメーション（charAnim = プレイヤーと同じ関数）
   if (!enemyTackling && !enemyKicking) {
-    let anim = 'idle';
-    if (moving) anim = (ballOwner === 'enemy' && clips['dribble']) ? 'dribble' : 'run';
-    fadeToEnemyClip(anim);
+    charAnim(enemyChar, moving ? (ballOwner === 'enemy' && clips['dribble'] ? 'dribble' : 'run') : 'idle');
   }
 }
 
@@ -354,15 +403,7 @@ function updateLocalPlayerBall(dt) {
   }
 
   isDribbling = ballOwner === 'player';
-
-  if (isDribbling) {
-    const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
-    const target = player.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
-    target.y = BALL_R;
-    ballMesh.position.lerp(target, Math.min(1, 50 * dt));
-    ballVel.set(0, 0, 0);
-    ballCurveRate = 0;
-  }
+  if (isDribbling) charDribble(playerChar, dt); // 共通関数を使用
 }
 
 function updateBall(dt) {
@@ -406,32 +447,19 @@ function updateBall(dt) {
   isDribbling = ballOwner === 'player';
 
   if (isDribbling) {
-    // プレイヤードリブル
+    charDribble(playerChar, dt); // プレイヤードリブル（共通関数）
     const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
-    const target = player.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
-    target.y = BALL_R;
-    ballMesh.position.lerp(target, Math.min(1, 50 * dt));
-    ballVel.set(0, 0, 0);
-    ballCurveRate = 0;
-
     const moving = keys.has('ArrowUp') || keys.has('KeyW') || keys.has('ArrowDown') || keys.has('KeyS')
               || keys.has('ArrowLeft') || keys.has('KeyA') || keys.has('ArrowRight') || keys.has('KeyD');
     if (moving) {
       const rollDir = (keys.has('ArrowUp') || keys.has('KeyW')) ? 1 : -1;
-      const axis = new THREE.Vector3(facing.z, 0, -facing.x);
-      ballMesh.rotateOnWorldAxis(axis, rollDir * MOVE_SPEED * dt / BALL_R);
+      ballMesh.rotateOnWorldAxis(new THREE.Vector3(facing.z, 0, -facing.x), rollDir * RUN_SPEED * dt / BALL_R);
     }
     return;
   }
 
   if (ballOwner === 'enemy') {
-    // 敵ドリブル
-    const facing = new THREE.Vector3(-Math.sin(enemy.rotation.y), 0, -Math.cos(enemy.rotation.y));
-    const target = enemy.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
-    target.y = BALL_R;
-    ballMesh.position.lerp(target, Math.min(1, 50 * dt));
-    ballVel.set(0, 0, 0);
-    ballCurveRate = 0;
+    charDribble(enemyChar, dt); // 敵ドリブル（共通関数）
     return;
   }
 
@@ -611,9 +639,9 @@ function cpuShoot({ ownerKey, goalX, anim, getKicking, setKicking, onDone }) {
   }, delay);
 }
 
-// ── アニメーションラッパー（呼び出し元は変更不要）────────────────────────
-function fadeToClip(name, loop = true)      { fadeToMixerClip(playerAnim, name, loop); }
-function fadeToEnemyClip(name, loop = true) { fadeToMixerClip(enemyAnim,  name, loop); }
+// 後方互換ラッパー（charAnim に委譲）
+function fadeToClip(name, loop = true)      { charAnim(playerChar, name, loop); }
+function fadeToEnemyClip(name, loop = true) { charAnim(enemyChar,  name, loop); }
 
 // ── Loading ───────────────────────────────────────────────────────────────
 const loadingEl  = document.getElementById('loading');
@@ -986,6 +1014,9 @@ export function startGame(config) {
         player.rotation.y = mpRole === 'host' ? -Math.PI / 2 : Math.PI / 2;
       }
       mixer = new THREE.AnimationMixer(character);
+      // playerChar を初期化（共通関数用）
+      playerChar.group     = player;
+      playerChar.animState = playerAnim;
       mixer.addEventListener('finished', e => {
         if (clips['kick']    && e.action === mixer.clipAction(clips['kick']))    isKicking  = false;
         if (clips['pass']    && e.action === mixer.clipAction(clips['pass']))    isPassing  = false;
@@ -1026,6 +1057,9 @@ export function startGame(config) {
         enemy.visible = false; // ゲーム開始まで非表示（Tポーズ防止）
         scene.add(enemy);
         enemyMixer = new THREE.AnimationMixer(fbx);
+        // enemyChar を初期化（共通関数用）
+        enemyChar.group     = enemy;
+        enemyChar.animState = enemyAnim;
         enemyMixer.addEventListener('finished', e => {
           if (clips['tackle'] && e.action === enemyMixer.clipAction(clips['tackle'])) enemyTackling = false;
           if (clips['kick']   && e.action === enemyMixer.clipAction(clips['kick']))   enemyKicking  = false;
@@ -1283,8 +1317,7 @@ function animate() {
         }
       }
 
-      player.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, player.position.x));
-      player.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, player.position.z));
+      charClampToField(playerChar);
 
       // viewAngle をプレイヤーの向きへゆっくり遅延追従
       if (!keys.has('KeyQ') && !keys.has('KeyE') && !lookSwipe.active) {
@@ -1301,8 +1334,7 @@ function animate() {
       const speed  = isTackling ? MOVE_SPEED * 1.3 : MOVE_SPEED;
       player.position.addScaledVector(facing, speed * dt);
       player.position.y = groundY; // 浮き防止
-      player.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, player.position.x));
-      player.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, player.position.z));
+      charClampToField(playerChar);
     }
 
     // スピンエフェクト
