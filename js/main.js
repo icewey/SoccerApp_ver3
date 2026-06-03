@@ -1054,9 +1054,9 @@ export function startGame(config) {
           }
         });
         remotePeer.add(fbx);
-        // Guest は反対側から（-x 方向が自ゴール）
-        const startX = mpRole === 'host' ? -15 : 15;
-        remotePeer.position.set(startX, 0, 0);
+        // リモートプレイヤーは自分と逆サイドに配置
+        const remoteStartX = mpRole === 'host' ? 15 : -15;
+        remotePeer.position.set(remoteStartX, 0, 0);
         remotePeer.visible = false;
         scene.add(remotePeer);
         remotePeerMixer = new THREE.AnimationMixer(fbx);
@@ -1065,10 +1065,7 @@ export function startGame(config) {
       undefined,
       () => onCoreLoaded()  // 読み込み失敗でも続行
     );
-    // Guest のゴールスコア関数を上書き（ホスト視点でのスコアを反映）
-    if (mpRole === 'guest') {
-      player.position.set(15, 0, 0);  // Guest は右側スタート（-x 方向へ攻める）
-    }
+    // マルチ時のプレイヤー開始x座標はキャラ読み込み後に設定（groundY確定後）
   }
 
   // キャラクター
@@ -1100,6 +1097,11 @@ export function startGame(config) {
         player.position.y -= meshBox.min.y;
       }
       groundY = player.position.y;
+      // マルチ: Host は左側(x<0)・Guest は右側(x>0) からスタート
+      if (isMultiplayer) {
+        player.position.x = mpRole === 'host' ? -15 : 15;
+        player.rotation.y = mpRole === 'host' ? -Math.PI / 2 : Math.PI / 2;
+      }
       mixer = new THREE.AnimationMixer(character);
       mixer.addEventListener('finished', e => {
         if (clips['kick']    && e.action === mixer.clipAction(clips['kick']))    isKicking  = false;
