@@ -701,30 +701,24 @@ function gkClampToGoalArea(char, myGoalX) {
 
 function gkAttemptSave(gkChar, gkSt, myGoalX, ownerKey) {
   if (gkSt.state === 'save' || gkSt.state === 'dive') return;
-  const deltaZ = ballMesh.position.z - gkChar.group.position.z;
+  const deltaZ  = ballMesh.position.z - gkChar.group.position.z;
   const useDive = Math.abs(deltaZ) > GK_DIVE_Z_THR;
   gkSt.state = useDive ? 'dive' : 'save';
   charAnim(gkChar, useDive ? 'gk_dive' : 'gk_catch', false);
 
-  const success    = Math.random() < GK_CATCH_CHANCE;
-  const animKey    = useDive ? 'gk_dive' : 'gk_catch';
-  const triggerMs  = clips[animKey] ? clips[animKey].duration * 0.5 * 1000 : 500;
-  const sessionSnap = gkSessionId; // stale-closure 対策
-
-  setTimeout(() => {
-    if (isGoalScene || gkSessionId !== sessionSnap) return;
-    if (gkSt.state !== 'save' && gkSt.state !== 'dive') return;
-    if (success) {
-      gkBallHolder  = ownerKey;
-      ballOwner     = 'none';
-      ballVel.set(0, 0, 0);
-      ballCurveRate = 0;
-      gkSt.state    = 'hold';
-      gkSt.holdTimer = GK_HOLD_TIME;
-    } else {
-      gkSt.state = 'patrol';
-    }
-  }, triggerMs);
+  // 成否は接触の瞬間に即決定する。成功なら即ボールを止めて確保し、ボールが
+  // ゴールラインを越える前に得点を防ぐ（旧実装は setTimeout で約500ms遅延し、
+  // その間にボールがゴール判定されて必ず失点していた）。
+  if (Math.random() < GK_CATCH_CHANCE) {
+    gkBallHolder   = ownerKey;
+    ballOwner      = 'none';
+    ballVel.set(0, 0, 0);
+    ballCurveRate  = 0;
+    gkSt.state     = 'hold';
+    gkSt.holdTimer = GK_HOLD_TIME;
+  }
+  // 失敗時は state を save/dive のまま維持 → ボールは通過し、セーブ/ダイブ
+  // アニメ終了時に mixer の 'finished' リスナが patrol へ戻す。
 }
 
 function gkDoThrow(gkChar, gkSt, teammateChar, ownerKey, myGoalX) {
@@ -919,15 +913,17 @@ function resetAfterGoal() {
   isKicking = isPassing = isTackling = isSpinning = false;
   playerPickupCooldown = 0;
 
-  pGKSt.state = 'patrol'; pGKSt.holdTimer = 0;
-  eGKSt.state = 'patrol'; eGKSt.holdTimer = 0;
+  pGKSt.state = 'patrol'; pGKSt.holdTimer = 0; pGKSt.patrolPhase = 0;
+  eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.patrolPhase = 0;
   if (playerGKMixer) {
-    playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), groundY, 0);
+    const pgy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
+    playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), pgy, 0);
     playerGKMixer.stopAllAction(); playerGKCurrent = null;
     charAnim(playerGKChar, 'idle');
   }
   if (enemyGKMixer) {
-    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, groundY, 0);
+    const egy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
+    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, egy, 0);
     enemyGKMixer.stopAllAction(); enemyGKCurrent = null;
     charAnim(enemyGKChar, 'idle');
   }
@@ -1065,12 +1061,14 @@ function onCoreLoaded() {
   if (coreReady === CORE_TOTAL) {
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
     if (playerGKMixer) {
-      playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), groundY, 0);
+      const pgy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
+      playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), pgy, 0);
       playerGKChar.group.visible = true;
       charAnim(playerGKChar, 'idle');
     }
     if (enemyGKMixer) {
-      enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, groundY, 0);
+      const egy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
+      enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, egy, 0);
       enemyGKChar.group.visible = true;
       charAnim(enemyGKChar, 'idle');
     }
@@ -1316,8 +1314,15 @@ export function startGame(config) {
 
     function loadOneGK(gkGroup, gkChar, gkAnimProxy, tintColor, gkSt) {
       loader.load(GK_FBX_PATH, fbx => {
-        fbx.scale.setScalar(0.01);
         fbx.rotation.y = Math.PI;
+        // ── スケール自動計算（GKモデルはMeshy AIの単位系が他キャラと異なるため、
+        // 固定0.01だとサイズ不正になる）。一旦追加して身長を測り1.75mに正規化する ──
+        gkGroup.position.set(0, 0, 0); // 再戦時の残留位置を排除して正確に計測
+        gkGroup.add(fbx);
+        gkGroup.updateMatrixWorld(true);
+        const rawBox = new THREE.Box3().setFromObject(fbx);
+        const rawH   = rawBox.max.y - rawBox.min.y;
+        fbx.scale.setScalar(rawH > 0.01 ? (1.75 / rawH) : 0.01);
         fbx.traverse(c => {
           if (c.isMesh) {
             c.castShadow = c.receiveShadow = true;
@@ -1331,7 +1336,11 @@ export function startGame(config) {
             }
           }
         });
-        gkGroup.add(fbx);
+        // スケール変更後に再計算してY接地オフセットを保存（足が y=0 に来るよう補正）
+        gkGroup.updateMatrixWorld(true);
+        const gkBox = new THREE.Box3().setFromObject(fbx);
+        gkGroup.userData.gkGroundOffset =
+          (isFinite(gkBox.min.y) && gkBox.min.y < -0.01) ? -gkBox.min.y : 0;
         const newMixer = new THREE.AnimationMixer(fbx);
         gkAnimProxy.mixer = newMixer;
         gkChar.animState  = gkAnimProxy;
