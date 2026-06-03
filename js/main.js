@@ -471,6 +471,49 @@ function updateEnemy(dt) {
   }
 }
 
+// ローカルプレイヤーのボール操作（拾得・タックル・ドリブル）
+// マルチプレイでも常に呼ぶ。物理シミュとゴール判定は含まない。
+function updateLocalPlayerBall(dt) {
+  if (!gameStarted || isGoalScene) return;
+
+  if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
+
+  const distPlayer = new THREE.Vector3()
+    .subVectors(ballMesh.position, player.position).setY(0).length();
+
+  // 手放し判定
+  if (ballOwner === 'player' && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing)))
+    ballOwner = 'none';
+
+  // タックル奪取（相手保持中でも可）
+  const TACKLE_DIST = 1.6;
+  if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST
+      && playerPickupCooldown <= 0) {
+    ballOwner = 'player';
+    playerPickupCooldown = 0;
+    isTackling = false;
+  }
+
+  // 通常拾得: 誰も保持していない時のみ
+  const remoteRoleLocal = mpRole === 'host' ? 'guest' : 'host';
+  const canPickup = !isMultiplayer || mpRemoteBallOwner !== remoteRoleLocal;
+  if (ballOwner === 'none' && canPickup) {
+    if (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0)
+      ballOwner = 'player';
+  }
+
+  isDribbling = ballOwner === 'player';
+
+  if (isDribbling) {
+    const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+    const target = player.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
+    target.y = BALL_R;
+    ballMesh.position.lerp(target, Math.min(1, 50 * dt));
+    ballVel.set(0, 0, 0);
+    ballCurveRate = 0;
+  }
+}
+
 function updateBall(dt) {
   if (!gameStarted) return;
   if (isGoalScene) return; // ゴールシーン中は物理停止
@@ -490,21 +533,32 @@ function updateBall(dt) {
   if (teammatePickupCooldown > 0) teammatePickupCooldown -= dt;
   if (enemyPickupCooldown    > 0) enemyPickupCooldown    -= dt;
 
-  if (ballOwner === 'player'   && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
-  if (ballOwner === 'teammate' &&  distTeam   >= DRIBBLE_DIST * 1.5 && !teammateKicking)            ballOwner = 'none';
-  if (ballOwner === 'enemy'   &&  distEnemy  >= DRIBBLE_DIST * 1.5 && !enemyKicking)              ballOwner = 'none';
-  if (ballOwner === 'none') {
-    if      (distPlayer < DRIBBLE_DIST && !isKicking && !enemyKicking && !teammateKicking && playerPickupCooldown <= 0)  ballOwner = 'player';
-    else if (distTeam   < DRIBBLE_DIST && !isKicking && !enemyKicking && teammatePickupCooldown <= 0)                    ballOwner = 'teammate';
-    else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && !teammateKicking && enemyPickupCooldown <= 0)         ballOwner = 'enemy';
-  }
-  // タックル中にボールが射程内 → 所有権奪取
-  const TACKLE_DIST = 1.6;
-  if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0 && !(ballOwner === 'enemy' && enemyKicking) && !(ballOwner === 'teammate' && teammateKicking)) {
-    ballOwner = 'player';
-    teammatePickupCooldown = 0.5;
-    enemyPickupCooldown    = 0.5;
-    isTackling = false;
+  if (ballOwner === 'teammate' &&  distTeam  >= DRIBBLE_DIST * 1.5 && !teammateKicking) ballOwner = 'none';
+  if (ballOwner === 'enemy'   &&  distEnemy >= DRIBBLE_DIST * 1.5 && !enemyKicking)   ballOwner = 'none';
+
+  if (!isMultiplayer) {
+    // ソロ専用: プレイヤー拾得・タックルはここで処理
+    if (ballOwner === 'player' && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
+    if (ballOwner === 'none') {
+      if      (distPlayer < DRIBBLE_DIST && !isKicking && !enemyKicking && !teammateKicking && playerPickupCooldown <= 0) ballOwner = 'player';
+      else if (distTeam   < DRIBBLE_DIST && !isKicking && !enemyKicking && teammatePickupCooldown <= 0)                   ballOwner = 'teammate';
+      else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && !teammateKicking && enemyPickupCooldown <= 0)        ballOwner = 'enemy';
+    }
+    const TACKLE_DIST = 1.6;
+    if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0
+        && !(ballOwner === 'enemy' && enemyKicking) && !(ballOwner === 'teammate' && teammateKicking)) {
+      ballOwner = 'player';
+      teammatePickupCooldown = 0.5;
+      enemyPickupCooldown    = 0.5;
+      isTackling = false;
+    }
+  } else {
+    // マルチ: プレイヤー操作は updateLocalPlayerBall() が担当（二重処理防止）
+    // CPU teammate/enemy 拾得のみここで処理
+    if (ballOwner === 'none') {
+      if      (distTeam  < DRIBBLE_DIST && !isKicking && !enemyKicking && teammatePickupCooldown <= 0) ballOwner = 'teammate';
+      else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && !teammateKicking && enemyPickupCooldown <= 0) ballOwner = 'enemy';
+    }
   }
   isDribbling = ballOwner === 'player';
 
@@ -1315,19 +1369,22 @@ function animate() {
   const remoteOwns = isMultiplayer && mpRemoteBallOwner === remoteRole;
 
   if (remoteOwns && ballOwner !== 'player') {
-    // 相手がボールを保持中 → 最新受信位置を直接適用
+    // 相手保持中: 最新受信位置を直接適用してブロック
     const bs = ballBuf.length > 0 ? ballBuf[ballBuf.length - 1] : null;
     if (bs) {
       ballMesh.position.set(bs.x, bs.y, bs.z);
       ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
     }
-    ballOwner = 'enemy'; // ローカルの拾得をブロック
+    ballOwner = 'enemy';
+    // タックル奪取は可能 → ローカル操作を実行
+    updateLocalPlayerBall(dt);
   } else if (!isMultiplayer || mpRole === 'host') {
-    updateBall(dt);      // ホスト or ソロ: 通常物理
+    // ソロ or Host通常: 全物理（プレイヤー拾得含む）
+    updateBall(dt);
   } else {
-    // Guest かつ相手がボールを持っていない場合: Hostの物理を受け取る
+    // Guest: Firebase からボール位置を受け取りローカル操作を実行
     if (ballOwner !== 'player') {
-      const bs = interpBuf(ballBuf, Date.now() - 50); // 低遅延で適用
+      const bs = interpBuf(ballBuf, Date.now() - 50);
       if (bs) {
         ballMesh.position.x += (bs.x - ballMesh.position.x) * Math.min(1, 20 * dt);
         ballMesh.position.y += (bs.y - ballMesh.position.y) * Math.min(1, 20 * dt);
@@ -1335,8 +1392,9 @@ function animate() {
         ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
       }
     }
+    updateLocalPlayerBall(dt); // 拾得・タックル・ドリブルをGuestでも実行
   }
-  // 'enemy' を継続チェック: 相手がもうボールを持っていなければ解放
+  // 相手がもうボールを持っていなければ 'enemy' を解放
   if (isMultiplayer && ballOwner === 'enemy' && !remoteOwns) ballOwner = 'none';
 
   if (!isMultiplayer) {
