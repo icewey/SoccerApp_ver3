@@ -18,6 +18,8 @@ scene.background = new THREE.Color(0x87ceeb);
 scene.fog = new THREE.FogExp2(0x9ecde8, 0.006);
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+camera.zoom = window.innerWidth > window.innerHeight ? window.innerWidth / window.innerHeight : 1;
+camera.updateProjectionMatrix();
 camera.position.set(0, 10, 20);
 
 // ── Lighting ──────────────────────────────────────────────────────────────
@@ -1227,11 +1229,17 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-window.addEventListener('resize', () => {
+function syncCameraToViewport() {
+  // 横持ち時: 画面の高さが縦持ちより短い分だけズームして同じ表示サイズをキープ
+  camera.zoom = window.innerWidth > window.innerHeight
+    ? window.innerWidth / window.innerHeight
+    : 1;
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-});
+}
+window.addEventListener('resize', syncCameraToViewport);
+window.addEventListener('orientationchange', () => setTimeout(syncCameraToViewport, 100));
 
 // ブラウザのピンチ・スクロールズームを無効化
 document.addEventListener('wheel', e => e.preventDefault(), { passive: false });

@@ -102,6 +102,19 @@
     #btn-tackle      { width:72px;height:72px; bottom:120px; right:45px;  background:rgba(255,60,60,0.45); }
     #btn-sprint      { width:56px;height:56px; bottom:20px;  right:15px;  background:rgba(255,200,0,0.3); border-radius:12px; }
 
+    /* ── 横持ち: ボタンをコンパクトに再配置 ── */
+    @media (orientation: landscape) and (pointer: coarse) {
+      #touch-controls  { height: 190px; }
+      #btn-pass        { width:52px;height:52px; bottom:128px; right:92px; }
+      #btn-spin        { width:50px;height:50px; bottom:128px; right:10px; }
+      #btn-kick        { width:54px;height:54px; bottom:68px;  right:92px; }
+      #btn-loft        { width:54px;height:54px; bottom:68px;  right:10px; }
+      #btn-curve-left  { width:50px;height:50px; bottom:10px;  right:92px; }
+      #btn-curve-right { width:50px;height:50px; bottom:10px;  right:10px; }
+      #btn-tackle      { width:58px;height:58px; bottom:68px;  right:162px; }
+      #btn-sprint      { width:48px;height:48px; bottom:10px;  right:162px; }
+    }
+
     /* プニコン */
     #joystick-base {
       display: none;
