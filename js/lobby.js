@@ -119,9 +119,17 @@ function render() {
   }
 }
 
+function requestFullscreen() {
+  const el = document.documentElement;
+  const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
+  fn?.call(el);
+}
+
 function kickOff() {
   const char = CHARACTERS[selectedIdx];
   if (!char.available) return;
+
+  requestFullscreen();
 
   // 選択されていないキャラからランダムに敵を選ぶ
   const enemyCandidates = CHARACTERS.filter((c, i) => c.available && i !== selectedIdx);
