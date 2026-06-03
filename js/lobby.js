@@ -61,9 +61,8 @@ const CHARACTERS = [
   },
 ];
 
-let selectedIdx  = 0;
-let withTeammate = true;
-let fieldSize    = 'full';
+let selectedIdx = 0;
+let fieldSize   = 'full';
 let mpMode       = false;   // true = リアル対戦モード
 let currentCode  = null;    // 作成/参加中のルームコード
 let roomWatcher  = null;    // Firebase unsubscribe 関数
@@ -155,10 +154,9 @@ function launchMultiplayer(role, code, hostInfo, guestInfo) {
   document.getElementById('loading').style.display = 'flex';
 
   startGame({
-    charFbx:      myChar.fbx,
-    withTeammate: false,
-    fieldSize:    fs,
-    enemyFbx:     null,
+    charFbx:   myChar.fbx,
+    fieldSize: fs,
+    enemyFbx:  null,
     mp: {
       role,
       code,
@@ -198,22 +196,11 @@ function kickOff() {
   const loadingEl = document.getElementById('loading');
   loadingEl.style.display = 'flex';
 
-  startGame({ charFbx: char.fbx, withTeammate, fieldSize, enemyFbx: enemyChar?.fbx ?? null });
+  startGame({ charFbx: char.fbx, fieldSize, enemyFbx: enemyChar?.fbx ?? null });
 }
 
 function init() {
   render();
-
-  document.getElementById('tm-yes').addEventListener('click', () => {
-    withTeammate = true;
-    document.getElementById('tm-yes').classList.add('active');
-    document.getElementById('tm-no').classList.remove('active');
-  });
-  document.getElementById('tm-no').addEventListener('click', () => {
-    withTeammate = false;
-    document.getElementById('tm-no').classList.add('active');
-    document.getElementById('tm-yes').classList.remove('active');
-  });
 
   const fsBtns = ['full', 'medium', 'compact'];
   fsBtns.forEach(size => {

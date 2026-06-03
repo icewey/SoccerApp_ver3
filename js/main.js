@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 // ── Renderer ──────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -151,15 +150,6 @@ const DRIBBLE_OFFSET = 0.65;  // ボールの足元オフセット
 
 let isDribbling = false;
 
-// ── チームメート ───────────────────────────────────────────────────────────
-const teammate    = new THREE.Group();
-let teammateMixer = null;
-let teammateCurrent = null;
-let teammateState   = 'support'; // 'support' | 'receive' | 'dribble'
-let teammateKicking = false;
-const TEAMMATE_SPEED     = 6.0;
-const TEAMMATE_RUN_SPEED = 10.0;
-
 // ── 敵キャラ ───────────────────────────────────────────────────────────────
 const enemy = new THREE.Group();
 let enemyMixer = null;
@@ -176,9 +166,8 @@ const ENEMY_TACKLE_RANGE     = 1.8;
 const ENEMY_TACKLE_COOLDOWN  = 2.5;
 
 // ── ボール所有権 ───────────────────────────────────────────────────────────
-let ballOwner = 'none'; // 'player' | 'teammate' | 'none'
-let playerPickupCooldown   = 0; // パス直後に自分がボールを即再拾いするのを防ぐ(秒)
-let teammatePickupCooldown = 0; // パス直後に味方がボールを即再拾いするのを防ぐ(秒)
+let ballOwner = 'none'; // 'player' | 'enemy' | 'none'
+let playerPickupCooldown = 0; // キック直後に自分がボールを即再拾いするのを防ぐ(秒)
 
 // ── プニコン（仮想スティック）─────────────────────────────────────────────
 const joystick = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
@@ -220,70 +209,6 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
   ballOwner   = 'none';
 }
 
-// ── パス（プレイヤー → チームメート）─────────────────────────────────────
-function passToTeammate(powered = false) {
-  if (!hasTeammate || ballOwner !== 'player') return;
-  const passClip = clips['pass'] || clips['kick'];
-  if (!passClip || !mixer) return;
-  const pwr = powered ? 1.4 : 1.0;
-
-  // isPassing を使う（isKicking にしないことで ballOwner を維持）
-  isKicking = false; isPassing = false;
-  isPassing = true;
-  fadeToClip('pass' in clips ? 'pass' : 'kick', false);
-
-  setTimeout(() => {
-    isPassing = false;
-    // アニメ発動タイミングでボールを蹴り出す
-    const toTM = new THREE.Vector3().subVectors(teammate.position, ballMesh.position);
-    toTM.y = 0;
-    const dist    = toTM.length();
-    const hSpeed  = Math.max(8, Math.min(22, dist * 1.4)) * pwr; // 距離に比例した威力
-    const travelTime = Math.max(0.1, dist / hSpeed);
-    const tmFwd = new THREE.Vector3(-Math.sin(teammate.rotation.y), 0, -Math.cos(teammate.rotation.y));
-    const leadPos = teammate.position.clone().addScaledVector(tmFwd, TEAMMATE_SPEED * travelTime * 0.5);
-    const toTarget = new THREE.Vector3().subVectors(leadPos, ballMesh.position);
-    toTarget.y = 0;
-    const dir = toTarget.normalize();
-    ballVel.set(dir.x * hSpeed, Math.max(2, dist * 0.08), dir.z * hSpeed);
-    ballCurveRate = 0;
-    ballOwner            = 'none';
-    isDribbling          = false;
-    playerPickupCooldown = 1.0; // 1秒間プレイヤーがボールを拾えないようにする
-    teammateState        = 'receive';
-  }, passClip.duration * 0.55 * 1000);
-}
-
-// ── パス（チームメート → プレイヤー）─────────────────────────────────────
-function passFromTeammate() {
-  if (!hasTeammate || ballOwner !== 'teammate') return;
-  const toPlayer = new THREE.Vector3().subVectors(player.position, ballMesh.position);
-  toPlayer.y = 0;
-  const dist   = toPlayer.length();
-  const dir    = toPlayer.normalize();
-  const hSpeed  = Math.max(8, Math.min(22, dist * 1.4)); // 距離に比例した威力
-  const isLofted = dist >= 14;                            // 14m以上は浮き球
-  const vSpeed  = isLofted ? Math.max(10, dist * 0.5) : Math.max(2, dist * 0.05);
-  ballVel.set(dir.x * hSpeed, vSpeed, dir.z * hSpeed);
-  ballCurveRate          = 0;
-  ballOwner              = 'none';
-  isDribbling            = false;
-  teammatePickupCooldown = 1.0; // 1秒間味方がボールを再拾いできないようにする
-  teammateState          = 'support';
-}
-
-// ── チームメートシュート ───────────────────────────────────────────────────
-function teammateShoot() {
-  cpuShoot({
-    ownerKey:   'teammate',
-    goalX:      GOAL_X,
-    anim:       teammateAnim,
-    getKicking: () => teammateKicking,
-    setKicking: v => { teammateKicking = v; },
-    onDone:     () => { teammatePickupCooldown = 1.5; teammateState = 'support'; },
-  });
-}
-
 // ── 敵シュート ────────────────────────────────────────────────────────────
 function enemyShoot() {
   cpuShoot({
@@ -294,31 +219,6 @@ function enemyShoot() {
     setKicking: v => { enemyKicking = v; },
     onDone:     () => { enemyPickupCooldown = 1.5; enemyState = 'chase'; },
   });
-}
-
-// ── チームメートAI ────────────────────────────────────────────────────────
-function getTeammateTargetPos() {
-  // ドリブル: 常にゴール方向へ前進
-  if (ballOwner === 'teammate') {
-    return new THREE.Vector3(GOAL_X, 0, teammate.position.z * 0.3);
-  }
-
-  // チェイス/プレス: ボールを追う（後退は最大15mに制限）
-  if (teammateState === 'chase') {
-    const bx = Math.max(ballMesh.position.x, teammate.position.x - 15);
-    const bz = ballMesh.position.z;
-    return new THREE.Vector3(bx, 0, bz);
-  }
-
-  // サポート/レシーブ: 常にボールより前・サイドの受けポジション
-  const sideZ    = teammate.position.z >= 0 ? 10 : -10;
-  const supportX = Math.max(teammate.position.x, ballMesh.position.x + 8);
-  const pos      = new THREE.Vector3(
-    Math.min(FIELD_HALF_W - 3, supportX),
-    0,
-    Math.max(-FIELD_HALF_D + 5, Math.min(FIELD_HALF_D - 5, ballMesh.position.z + sideZ))
-  );
-  return pos;
 }
 
 // ── 共通 CPU 移動（移動 + 方向スナップ、trueなら実際に移動した）──────────
@@ -333,71 +233,6 @@ function cpuMove(entity, targetPos, speed, dt) {
   return true;
 }
 
-function updateTeammate(dt) {
-  if (!hasTeammate || !gameStarted || !teammateMixer || isGoalScene) return;
-  teammateMixer.update(dt);
-
-  // ── 状態遷移（シンプル3状態）
-  if (ballOwner === 'teammate') {
-    teammateState = 'dribble';
-  } else if (ballOwner === 'none' || ballOwner === 'enemy') {
-    if (teammateState !== 'receive') teammateState = 'chase';
-    if (teammateState === 'receive' && ballVel.lengthSq() < 1) teammateState = 'chase';
-  } else {
-    // ballOwner === 'player'
-    teammateState = 'support';
-  }
-
-  // ── 移動
-  const targetPos    = getTeammateTargetPos();
-  const distToTarget = new THREE.Vector3().subVectors(targetPos, teammate.position).setY(0).length();
-  const isChase      = teammateState === 'chase';
-  const tmSpeed      = (distToTarget > 4 || isChase) ? TEAMMATE_RUN_SPEED : TEAMMATE_SPEED;
-  const moving       = !teammateKicking && cpuMove(teammate, targetPos, tmSpeed, dt);
-  teammate.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, teammate.position.x));
-  teammate.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, teammate.position.z));
-
-  // ── 向き: ドリブル・サポートは常にゴール方向（+x）を向く
-  // チェイス時のみ cpuMove が設定したボール方向を向く
-  if (!teammateKicking && teammateState !== 'chase') {
-    teammate.rotation.y = -Math.PI / 2; // +x方向（相手ゴール向き）
-  }
-
-  // ── ドリブル中はボールをこのフレームの向きで正確に配置（更新順序のズレを補正）
-  if (ballOwner === 'teammate') {
-    const facing = new THREE.Vector3(-Math.sin(teammate.rotation.y), 0, -Math.cos(teammate.rotation.y));
-    const ballTarget = teammate.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
-    ballTarget.y = BALL_R;
-    ballMesh.position.copy(ballTarget);
-    ballVel.set(0, 0, 0);
-  }
-
-  // ── シュート判定
-  const PENALTY_Z = FIELD_HALF_D * 0.611;
-  if (ballOwner === 'teammate' && !teammateKicking
-      && teammate.position.x > GOAL_X - FIELD_HALF_W * 0.48
-      && Math.abs(teammate.position.z) <= PENALTY_Z) {
-    const distToGoal = GOAL_X - teammate.position.x;
-    const angleRatio = distToGoal > 0 ? Math.abs(teammate.position.z) / distToGoal : 0;
-    if (angleRatio <= 0.65 || distToGoal <= 8) {
-      teammateShoot();
-    }
-  }
-
-  // ── 敵ボール奪取
-  if (ballOwner === 'enemy' && hasEnemy && teammatePickupCooldown <= 0 && !enemyKicking) {
-    const dToBall = new THREE.Vector3().subVectors(ballMesh.position, teammate.position);
-    dToBall.y = 0;
-    if (dToBall.length() < DRIBBLE_DIST * 1.2) {
-      ballOwner = 'teammate';
-      enemyPickupCooldown = 0.8;
-    }
-  }
-
-  // ── アニメ
-  if (!teammateKicking) fadeToTeammateClip(moving ? 'run' : 'idle');
-}
-
 // ── 敵AI ─────────────────────────────────────────────────────────────────
 function updateEnemy(dt) {
   if (!hasEnemy || !gameStarted || !enemyMixer || isGoalScene) return;
@@ -410,10 +245,9 @@ function updateEnemy(dt) {
   const distEnemyBall = toEnemyBall.length();
 
   // タックルによる奪取
-  if (enemyTackling && ballOwner !== 'enemy' && distEnemyBall < ENEMY_TACKLE_RANGE && enemyPickupCooldown <= 0 && !isKicking && !teammateKicking) {
+  if (enemyTackling && ballOwner !== 'enemy' && distEnemyBall < ENEMY_TACKLE_RANGE && enemyPickupCooldown <= 0 && !isKicking) {
     ballOwner = 'enemy';
-    playerPickupCooldown   = 0.6;
-    teammatePickupCooldown = 0.6;
+    playerPickupCooldown = 0.6;
     enemyTackling = false;
   }
 
@@ -431,7 +265,7 @@ function updateEnemy(dt) {
     targetPos = ballMesh.position.clone();
     targetPos.y = 0;
     // ボール保持者にタックル
-    if ((ballOwner === 'player' || ballOwner === 'teammate') &&
+    if (ballOwner === 'player' &&
         distEnemyBall < 3.0 && !enemyTackling && enemyTackleCooldown <= 0) {
       enemyTackling = true;
       enemyTackleCooldown = ENEMY_TACKLE_COOLDOWN;
@@ -538,43 +372,35 @@ function updateBall(dt) {
   const toPlayer   = new THREE.Vector3().subVectors(ballMesh.position, player.position);
   toPlayer.y = 0;
   const distPlayer = toPlayer.length();
-  const toTeam     = new THREE.Vector3().subVectors(ballMesh.position, teammate.position);
-  toTeam.y = 0;
-  const distTeam   = toTeam.length();
   const toEnemyB   = hasEnemy ? new THREE.Vector3().subVectors(ballMesh.position, enemy.position) : new THREE.Vector3(999, 0, 0);
   if (hasEnemy) toEnemyB.y = 0;
   const distEnemy  = toEnemyB.length();
 
   // ── ボール所有権の更新 ──────────────────────────────────────────────────
-  if (playerPickupCooldown   > 0) playerPickupCooldown   -= dt;
-  if (teammatePickupCooldown > 0) teammatePickupCooldown -= dt;
-  if (enemyPickupCooldown    > 0) enemyPickupCooldown    -= dt;
+  if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
+  if (enemyPickupCooldown  > 0) enemyPickupCooldown  -= dt;
 
-  if (ballOwner === 'teammate' &&  distTeam  >= DRIBBLE_DIST * 1.5 && !teammateKicking) ballOwner = 'none';
-  if (ballOwner === 'enemy'   &&  distEnemy >= DRIBBLE_DIST * 1.5 && !enemyKicking)   ballOwner = 'none';
+  if (ballOwner === 'enemy' && distEnemy >= DRIBBLE_DIST * 1.5 && !enemyKicking) ballOwner = 'none';
 
   if (!isMultiplayer) {
     // ソロ専用: プレイヤー拾得・タックルはここで処理
     if (ballOwner === 'player' && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
     if (ballOwner === 'none') {
-      if      (distPlayer < DRIBBLE_DIST && !isKicking && !enemyKicking && !teammateKicking && playerPickupCooldown <= 0) ballOwner = 'player';
-      else if (distTeam   < DRIBBLE_DIST && !isKicking && !enemyKicking && teammatePickupCooldown <= 0)                   ballOwner = 'teammate';
-      else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && !teammateKicking && enemyPickupCooldown <= 0)        ballOwner = 'enemy';
+      if      (distPlayer < DRIBBLE_DIST && !isKicking && !enemyKicking && playerPickupCooldown <= 0) ballOwner = 'player';
+      else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && enemyPickupCooldown <= 0)        ballOwner = 'enemy';
     }
     const TACKLE_DIST = 1.6;
     if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0
-        && !(ballOwner === 'enemy' && enemyKicking) && !(ballOwner === 'teammate' && teammateKicking)) {
+        && !(ballOwner === 'enemy' && enemyKicking)) {
       ballOwner = 'player';
-      teammatePickupCooldown = 0.5;
-      enemyPickupCooldown    = 0.5;
+      enemyPickupCooldown = 0.5;
       isTackling = false;
     }
   } else {
     // マルチ: プレイヤー操作は updateLocalPlayerBall() が担当（二重処理防止）
-    // CPU teammate/enemy 拾得のみここで処理
+    // CPU enemy 拾得のみここで処理
     if (ballOwner === 'none') {
-      if      (distTeam  < DRIBBLE_DIST && !isKicking && !enemyKicking && teammatePickupCooldown <= 0) ballOwner = 'teammate';
-      else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && !teammateKicking && enemyPickupCooldown <= 0) ballOwner = 'enemy';
+      if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && enemyPickupCooldown <= 0) ballOwner = 'enemy';
     }
   }
   isDribbling = ballOwner === 'player';
@@ -595,17 +421,6 @@ function updateBall(dt) {
       const axis = new THREE.Vector3(facing.z, 0, -facing.x);
       ballMesh.rotateOnWorldAxis(axis, rollDir * MOVE_SPEED * dt / BALL_R);
     }
-    return;
-  }
-
-  if (ballOwner === 'teammate') {
-    // チームメートドリブル
-    const facing = new THREE.Vector3(-Math.sin(teammate.rotation.y), 0, -Math.cos(teammate.rotation.y));
-    const target = teammate.position.clone().addScaledVector(facing, DRIBBLE_OFFSET);
-    target.y = BALL_R;
-    ballMesh.position.lerp(target, Math.min(1, 50 * dt));
-    ballVel.set(0, 0, 0);
-    ballCurveRate = 0;
     return;
   }
 
@@ -719,11 +534,6 @@ window.addEventListener('keydown', e => {
         fadeToClip('spin', false);
       }
     }
-    if (e.code === 'KeyR' && !isPassing) {
-      const powered = keys.has('ShiftLeft') || keys.has('ShiftRight');
-      if (ballOwner === 'player')        passToTeammate(powered);
-      else if (ballOwner === 'teammate') passFromTeammate();
-    }
   }
 }, { capture: true }); // captureでブラウザより先にキーを受け取る
 
@@ -745,7 +555,6 @@ let isPassing   = false;
 let isTackling  = false;
 let isSpinning  = false;
 let groundY     = 0;
-let hasTeammate = true;
 let playerScore = 0;
 let cpuScore    = 0;
 let isGoalScene = false;
@@ -759,13 +568,9 @@ function stripRootMotion(clip) {
 }
 
 // ── アニメ状態プロキシ（getter/setter で let 変数を共有参照）─────────────
-const playerAnim   = {
+const playerAnim = {
   get mixer()   { return mixer; },        set mixer(v)   { mixer = v; },
   get current() { return current; },      set current(v) { current = v; },
-};
-const teammateAnim = {
-  get mixer()   { return teammateMixer; },  set mixer(v)   { teammateMixer = v; },
-  get current() { return teammateCurrent; },set current(v) { teammateCurrent = v; },
 };
 const enemyAnim = {
   get mixer()   { return enemyMixer; },   set mixer(v)   { enemyMixer = v; },
@@ -809,9 +614,8 @@ function cpuShoot({ ownerKey, goalX, anim, getKicking, setKicking, onDone }) {
 }
 
 // ── アニメーションラッパー（呼び出し元は変更不要）────────────────────────
-function fadeToClip(name, loop = true)         { fadeToMixerClip(playerAnim,   name, loop); }
-function fadeToTeammateClip(name, loop = true) { fadeToMixerClip(teammateAnim, name, loop); }
-function fadeToEnemyClip(name, loop = true)    { fadeToMixerClip(enemyAnim,    name, loop); }
+function fadeToClip(name, loop = true)      { fadeToMixerClip(playerAnim, name, loop); }
+function fadeToEnemyClip(name, loop = true) { fadeToMixerClip(enemyAnim,  name, loop); }
 
 // ── Loading ───────────────────────────────────────────────────────────────
 const loadingEl  = document.getElementById('loading');
@@ -896,18 +700,10 @@ function resetAfterGoal() {
   ballOwner = 'none';
   isDribbling = false;
   isKicking = isPassing = isTackling = isSpinning = false;
-  playerPickupCooldown = teammatePickupCooldown = 0;
+  playerPickupCooldown = 0;
 
   player.position.set(0, groundY, 0);
   player.rotation.y = 0;
-
-  if (hasTeammate) {
-    teammate.position.set(10, groundY, 5);
-    teammate.rotation.y = 0;
-    teammateKicking = false;
-    if (teammateMixer) { teammateMixer.stopAllAction(); teammateCurrent = null; }
-    fadeToTeammateClip('idle');
-  }
 
   if (mixer) { mixer.stopAllAction(); current = null; }
   fadeToClip('idle');
@@ -1075,8 +871,7 @@ function onCoreLoaded() {
     if (scoreDisplay) scoreDisplay.style.display = 'flex';
     gameStarted = true;
     fadeToClip('idle');
-    if (hasTeammate) fadeToTeammateClip('idle');
-    if (hasEnemy)    fadeToEnemyClip('idle');
+    if (hasEnemy) fadeToEnemyClip('idle');
     if (isMultiplayer) fadeToRemoteClip('idle');
   }
 }
@@ -1090,10 +885,8 @@ export function startGame(config) {
   while (remotePeer.children.length > 0) remotePeer.remove(remotePeer.children[0]);
   scene.remove(remotePeer);
   remotePeerMixer = null; remotePeerClipAct = {};
-  // teammate / enemy を scene から除去（CPU戦の残骸防止）
-  scene.remove(teammate);
+  // enemy を scene から除去（CPU戦の残骸防止）
   scene.remove(enemy);
-  while (teammate.children.length > 0) teammate.remove(teammate.children[0]);
   while (enemy.children.length > 0) enemy.remove(enemy.children[0]);
   // カウンタとゲーム状態リセット
   CORE_TOTAL = 1 + ANIM_FILES.length;
@@ -1122,8 +915,7 @@ export function startGame(config) {
   fieldRoot = buildField(fs.halfW, fs.halfD);
   scene.add(fieldRoot);
 
-  hasTeammate = config.withTeammate;
-  hasEnemy    = !!config.enemyFbx;
+  hasEnemy = !!config.enemyFbx;
   if (hasEnemy) CORE_TOTAL++;
 
   // マルチプレイヤー設定
@@ -1131,7 +923,6 @@ export function startGame(config) {
     isMultiplayer = true;
     mpRole        = config.mp.role;
     mpHandlers    = config.mp;
-    hasTeammate   = false;
     hasEnemy      = false;
     CORE_TOTAL++;  // リモートキャラ読み込み分
     // リモートプレイヤーのキャラ読み込み
@@ -1204,34 +995,6 @@ export function startGame(config) {
         if (clips['tackle']  && e.action === mixer.clipAction(clips['tackle']))  isTackling = false;
         if (clips['spin']    && e.action === mixer.clipAction(clips['spin']))    isSpinning = false;
       });
-
-      if (hasTeammate) {
-        const tmFbx = SkeletonUtils.clone(fbx);
-        tmFbx.scale.setScalar(0.01);
-        tmFbx.rotation.y = Math.PI;
-        tmFbx.traverse(c => {
-          if (c.isMesh) {
-            c.castShadow = true;
-            c.receiveShadow = true;
-            c.material = Array.isArray(c.material)
-              ? c.material.map(m => { const mc = m.clone(); mc.color.set(0x88bbff); return mc; })
-              : (() => { const mc = c.material.clone(); mc.color.set(0x88bbff); return mc; })();
-          }
-        });
-        teammate.add(tmFbx);
-        teammate.position.set(10, player.position.y, 5);
-        scene.add(teammate);
-        teammateMixer = new THREE.AnimationMixer(tmFbx);
-        teammateMixer.addEventListener('finished', e => {
-          if (clips['kick'] && e.action === teammateMixer.clipAction(clips['kick'])) teammateKicking = false;
-        });
-        const marker = new THREE.Mesh(
-          new THREE.SphereGeometry(0.12, 8, 8),
-          new THREE.MeshBasicMaterial({ color: 0x2266ff })
-        );
-        marker.position.set(0, 2.05, 0);
-        teammate.add(marker);
-      }
 
       onCoreLoaded();
     },
@@ -1439,7 +1202,6 @@ function animate() {
   if (isMultiplayer && ballOwner === 'enemy' && !remoteOwns) ballOwner = 'none';
 
   if (!isMultiplayer) {
-    updateTeammate(dt);
     updateEnemy(dt);
   } else if (gameStarted) {
     // リモートプレイヤーをバッファから補間して描画
@@ -1703,18 +1465,6 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
   setupKickBtn('btn-curve-left',  false, -1);
   setupKickBtn('btn-curve-right', false,  1);
 
-  // パスボタン
-  const passBtn = document.getElementById('btn-pass');
-  if (passBtn) {
-    passBtn.addEventListener('touchstart', e => {
-      e.preventDefault();
-      if (!gameStarted || isPassing) return;
-      const powered = keys.has('ShiftLeft') || keys.has('ShiftRight');
-      if (ballOwner === 'player')        passToTeammate(powered);
-      else if (ballOwner === 'teammate') passFromTeammate();
-    }, { passive: false });
-  }
-
   // タックルボタン（ボール非所持時のみ有効）
   const tackleBtn = document.getElementById('btn-tackle');
   if (tackleBtn) {
@@ -1748,7 +1498,6 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     });
     if (tackleBtn) tackleBtn.style.display = hasBall ? 'none' : '';
     if (spinBtn)   spinBtn.style.display   = hasBall ? '' : 'none';
-    if (passBtn)   passBtn.style.display   = hasTeammate ? '' : 'none';
   }
   // animate() から呼べるようにグローバル化
   window._updateMobileButtons = updateMobileButtons;

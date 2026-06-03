@@ -98,7 +98,6 @@
     .touch-btn:active { background: rgba(255,255,255,0.38); }
 
     /* 右：アクションボタン（全て右半分に配置） */
-    #btn-pass        { width:64px;height:64px; bottom:240px; right:52px;  background:rgba(0,200,80,0.35);  }
     #btn-spin        { width:60px;height:60px; bottom:240px; right:10px;  background:rgba(255,220,0,0.35); }
     #btn-kick        { width:64px;height:64px; bottom:165px; right:90px;  background:rgba(255,80,80,0.3); }
     #btn-loft        { width:64px;height:64px; bottom:165px; right:15px;  background:rgba(255,140,0,0.3); }
@@ -110,7 +109,6 @@
     /* ── 横持ち: ボタンをコンパクトに再配置 ── */
     @media (orientation: landscape) and (pointer: coarse) {
       #touch-controls  { height: 190px; }
-      #btn-pass        { width:52px;height:52px; bottom:128px; right:92px; }
       #btn-spin        { width:50px;height:50px; bottom:128px; right:10px; }
       #btn-kick        { width:54px;height:54px; bottom:68px;  right:92px; }
       #btn-loft        { width:54px;height:54px; bottom:68px;  right:10px; }
@@ -365,7 +363,7 @@
       padding: 3px 6px;
     }
 
-    /* ── teammate toggle ── */
+    /* ── toggle row (Field Size) ── */
     .lb-tm-row {
       display: flex;
       align-items: center;
@@ -661,13 +659,6 @@
       <!-- CPU対戦コントロール -->
       <div id="cpu-controls">
         <div class="lb-tm-row">
-          <span class="lb-tm-label">Teammate</span>
-          <div class="lb-tm-toggle">
-            <button class="lb-tm-btn active" id="tm-yes">あり</button>
-            <button class="lb-tm-btn"        id="tm-no">なし</button>
-          </div>
-        </div>
-        <div class="lb-tm-row">
           <span class="lb-tm-label">Field Size</span>
           <div class="lb-tm-toggle">
             <button class="lb-tm-btn active" id="fs-full">11v11</button>
@@ -750,7 +741,6 @@
     <span>G : キック（ロフト）</span>
     <span>H : カーブ左</span>
     <span>J : カーブ右</span>
-    <span>R : パス</span>
     <span>T : タックル（ボールなし時）</span>
     <span>Z : スピン（ドリブル時）</span>
   </div>
@@ -762,7 +752,6 @@
 
   <!-- タッチ操作ボタン（右側のみ） -->
   <div id="touch-controls">
-    <div class="touch-btn" id="btn-pass">パス</div>
     <div class="touch-btn" id="btn-spin">スピン</div>
     <div class="touch-btn" id="btn-kick">低</div>
     <div class="touch-btn" id="btn-loft">高</div>
