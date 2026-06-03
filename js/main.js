@@ -181,8 +181,8 @@ let enemyGKMixer    = null;
 let enemyGKCurrent  = null;
 const playerGKChar  = { group: playerGKGroup, animState: null };
 const enemyGKChar   = { group: enemyGKGroup,  animState: null };
-const pGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0 };
-const eGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0 };
+const pGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0, catchAnimTimer: 0 };
+const eGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0, catchAnimTimer: 0 };
 
 const GK_SPEED        = 9.0;
 const GK_X_OFFSET     = 2.0;
@@ -716,6 +716,9 @@ function gkAttemptSave(gkChar, gkSt, myGoalX, ownerKey) {
     ballCurveRate  = 0;
     gkSt.state     = 'hold';
     gkSt.holdTimer = GK_HOLD_TIME;
+    // 捕球モーションを再生し切る時間（hold中はこの間 idle に上書きしない）
+    const saveClip = clips[useDive ? 'gk_dive' : 'gk_catch'];
+    gkSt.catchAnimTimer = saveClip ? saveClip.duration : 0.8;
   }
   // 失敗時は state を save/dive のまま維持 → ボールは通過し、セーブ/ダイブ
   // アニメ終了時に mixer の 'finished' リスナが patrol へ戻す。
@@ -760,7 +763,10 @@ function updateGK(gkChar, gkSt, myGoalX, teammateChar, ownerKey, dt) {
     ballMesh.position.set(gkPos.x, gkPos.y + 1.2, gkPos.z);
     ballVel.set(0, 0, 0);
     ballCurveRate = 0;
-    charAnim(gkChar, 'idle');
+    // キャッチ/ダイブのアニメを最後まで再生してから idle に切り替える
+    // （即 idle にすると捕球モーションが一瞬で打ち消されて見えないため）
+    if (gkSt.catchAnimTimer > 0) gkSt.catchAnimTimer -= dt;
+    else                        charAnim(gkChar, 'idle');
     gkSt.holdTimer -= dt;
     if (gkSt.holdTimer <= 0) {
       gkSt.state = 'throw';
@@ -772,16 +778,21 @@ function updateGK(gkChar, gkSt, myGoalX, teammateChar, ownerKey, dt) {
   // ── スロー/セーブアニメ再生中 ────────────────────────────────────
   if (gkSt.state === 'throw' || gkSt.state === 'save' || gkSt.state === 'dive') return;
 
-  // ── 待機（棒立ち）：ゴール中央に立ち、ボールへ体を向ける ────────────
+  // ── 待機：ボールがハーフラインを超えて自陣に来たら、ゴールライン上を
+  //    水平移動してボールのZに合わせつつ、体をボールへ正対させる。
+  //    自陣にボールが無いときは中央で棒立ち＋フィールド正面を向く。 ────────
   gkSt.state = 'patrol';
-  // ダイブ後など中央からずれていれば静かに戻る（通常は動かず棒立ち）
-  const moved = gkMoveTo(gkChar, new THREE.Vector3(standX, 0, 0), dt);
-  charAnim(gkChar, moved ? 'gk_sidestep' : 'idle');
-
-  // ボールがハーフラインを超えて自陣に来たらボールへ正対する。
-  // 自陣にボールが無いときはフィールド正面を向く。
   const ballInOwnHalf = Math.sign(ballMesh.position.x) === Math.sign(myGoalX)
                         && Math.abs(ballMesh.position.x) > 0.5;
+
+  // 目標Z: 自陣ならボールのZに追従（ゴール幅にクランプ）、なければ中央へ戻る
+  const targetZ = ballInOwnHalf
+    ? Math.max(-GOAL_HALF_Z, Math.min(GOAL_HALF_Z, ballMesh.position.z))
+    : 0;
+  const moved = gkMoveTo(gkChar, new THREE.Vector3(standX, 0, targetZ), dt);
+  charAnim(gkChar, moved ? 'gk_sidestep' : 'idle');
+
+  // 体の向き（gkMoveTo が設定した向きを上書き）
   if (ballInOwnHalf) {
     const toBall = new THREE.Vector3().subVectors(ballMesh.position, gkPos).setY(0);
     if (toBall.lengthSq() > 0.01) {
