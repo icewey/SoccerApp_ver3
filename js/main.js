@@ -849,18 +849,55 @@ let CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ（敵追加�
 let coreReady = 0;
 let gameStarted = false;
 
+// ── マルチプレイヤー ──────────────────────────────────────────────
+let isMultiplayer     = false;
+let mpRole            = null;      // 'host' | 'guest'
+let mpHandlers        = null;      // { publishPlayer, publishBall, publishScore, watchGame }
+let remotePeer        = new THREE.Group();
+let remotePeerMixer   = null;
+let remotePeerClipAct = {};        // { idle, run }
+let remotePlayerState = null;      // 受信した相手の状態
+let remoteBallState   = null;      // 受信したボール状態
+let mpTimer           = 0;
+let gameWatcher       = null;      // Firebase unsubscribe
+
+function fadeToRemoteClip(name) {
+  if (!remotePeerMixer || !clips[name]) return;
+  const act = remotePeerClipAct[name]
+    ?? (remotePeerClipAct[name] = remotePeerMixer.clipAction(clips[name]));
+  if (act.isRunning()) return;
+  Object.values(remotePeerClipAct).forEach(a => a.fadeOut(0.2));
+  act.reset().fadeIn(0.2).play();
+}
+
 function onCoreLoaded() {
   coreReady++;
   const pct = Math.round((coreReady / CORE_TOTAL) * 100);
   loadingBar.style.width = pct + '%';
   if (coreReady === CORE_TOTAL) {
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
+    if (isMultiplayer) {
+      remotePeer.position.y = groundY;
+      remotePeer.visible = true;
+      // ゲーム状態を Firebase で監視開始
+      gameWatcher = mpHandlers.watchGame(data => {
+        const remote = mpRole === 'host' ? data?.guest : data?.host;
+        if (remote) remotePlayerState = remote;
+        if (data?.ball) remoteBallState = data.ball;
+        if (data?.score && mpRole === 'guest') {
+          playerScore = data.score.guest ?? 0;
+          cpuScore    = data.score.host  ?? 0;
+          updateScoreDisplay();
+        }
+      });
+    }
     loadingEl.style.display = 'none';
     if (scoreDisplay) scoreDisplay.style.display = 'flex';
     gameStarted = true;
     fadeToClip('idle');
     if (hasTeammate) fadeToTeammateClip('idle');
     if (hasEnemy)    fadeToEnemyClip('idle');
+    if (isMultiplayer) fadeToRemoteClip('idle');
   }
 }
 
@@ -884,6 +921,46 @@ export function startGame(config) {
   hasTeammate = config.withTeammate;
   hasEnemy    = !!config.enemyFbx;
   if (hasEnemy) CORE_TOTAL++;
+
+  // マルチプレイヤー設定
+  if (config.mp) {
+    isMultiplayer = true;
+    mpRole        = config.mp.role;
+    mpHandlers    = config.mp;
+    hasTeammate   = false;
+    hasEnemy      = false;
+    CORE_TOTAL++;  // リモートキャラ読み込み分
+    // リモートプレイヤーのキャラ読み込み
+    loader.load(
+      config.mp.remoteCharFbx,
+      fbx => {
+        fbx.scale.setScalar(0.01);
+        fbx.rotation.y = Math.PI;
+        fbx.traverse(c => {
+          if (c.isMesh) {
+            c.castShadow = true; c.receiveShadow = true;
+            c.material = Array.isArray(c.material)
+              ? c.material.map(m => { const mc = m.clone(); mc.color.set(0xff8844); return mc; })
+              : (() => { const mc = c.material.clone(); mc.color.set(0xff8844); return mc; })();
+          }
+        });
+        remotePeer.add(fbx);
+        // Guest は反対側から（-x 方向が自ゴール）
+        const startX = mpRole === 'host' ? -15 : 15;
+        remotePeer.position.set(startX, 0, 0);
+        remotePeer.visible = false;
+        scene.add(remotePeer);
+        remotePeerMixer = new THREE.AnimationMixer(fbx);
+        onCoreLoaded();
+      },
+      undefined,
+      () => onCoreLoaded()  // 読み込み失敗でも続行
+    );
+    // Guest のゴールスコア関数を上書き（ホスト視点でのスコアを反映）
+    if (mpRole === 'guest') {
+      player.position.set(15, 0, 0);  // Guest は右側スタート（-x 方向へ攻める）
+    }
+  }
 
   // キャラクター
   loader.load(
@@ -1121,9 +1198,50 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   if (mixer) mixer.update(dt);
-  updateBall(dt);
-  updateTeammate(dt);
-  updateEnemy(dt);
+
+  // マルチプレイヤー: Guest はボール物理をスキップ（Hostから受け取る）
+  if (!isMultiplayer || mpRole === 'host') updateBall(dt);
+  else if (isMultiplayer && remoteBallState && ballOwner !== 'player') {
+    // Guest: ボール位置をFirebaseから補間適用
+    ballMesh.position.x += (remoteBallState.x - ballMesh.position.x) * 0.4;
+    ballMesh.position.y += (remoteBallState.y - ballMesh.position.y) * 0.4;
+    ballMesh.position.z += (remoteBallState.z - ballMesh.position.z) * 0.4;
+    ballVel.set(remoteBallState.vx ?? 0, remoteBallState.vy ?? 0, remoteBallState.vz ?? 0);
+  }
+
+  if (!isMultiplayer) {
+    updateTeammate(dt);
+    updateEnemy(dt);
+  } else if (gameStarted) {
+    // リモートプレイヤーの状態を適用
+    if (remotePlayerState && remotePeerMixer) {
+      remotePeer.position.x = remotePlayerState.x;
+      remotePeer.position.z = remotePlayerState.z;
+      remotePeer.rotation.y = remotePlayerState.ry;
+      remotePeerMixer.update(dt);
+      const moving = remotePlayerState.anim !== 'idle';
+      fadeToRemoteClip(moving ? 'run' : 'idle');
+    }
+    // 自分の状態を20Hzで送信
+    mpTimer += dt;
+    if (mpTimer >= 0.05) {
+      mpTimer = 0;
+      const anim = getDesiredAnim() || 'idle';
+      mpHandlers.publishPlayer(mpRole, {
+        x: player.position.x, z: player.position.z,
+        ry: player.rotation.y, anim,
+      });
+      if (mpRole === 'host') {
+        // Host がボール状態を送信
+        mpHandlers.publishBall({
+          x: ballMesh.position.x, y: ballMesh.position.y, z: ballMesh.position.z,
+          vx: ballVel.x, vy: ballVel.y, vz: ballVel.z,
+        });
+        mpHandlers.publishScore({ host: playerScore, guest: cpuScore });
+      }
+    }
+  }
+
   updateSpinEffects(dt);
 
   if (gameStarted) {

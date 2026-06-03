@@ -579,6 +579,60 @@
       #lb-kickoff { padding: 13px 38px; font-size: 0.9rem; letter-spacing: 5px; }
       .lb-tm-btn  { padding: 7px 16px; }
     }
+
+    /* ── リアル対戦 ── */
+    #lb-mode-row { display: flex; gap: 8px; }
+    .lb-mode-btn {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.18);
+      color: rgba(255,255,255,0.4);
+      padding: 7px 22px; border-radius: 20px;
+      cursor: pointer; font-size: 0.78rem; letter-spacing: 3px;
+      font-family: inherit; transition: all 0.18s;
+    }
+    .lb-mode-btn.active { background: rgba(255,255,255,0.1); color:#fff; border-color:rgba(255,255,255,0.4); }
+    #mp-panel { display: none; flex-direction: column; align-items: center; gap: 16px; width: 100%; }
+    #mp-panel.open { display: flex; }
+    .mp-btns { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    .mp-btn {
+      padding: 12px 28px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: rgba(255,255,255,0.06);
+      color: #fff; font-size: 0.88rem; letter-spacing: 2px;
+      cursor: pointer; font-family: inherit; transition: all 0.18s;
+    }
+    .mp-btn:hover { background: rgba(255,255,255,0.12); }
+    .mp-btn.primary { background: rgba(0,180,120,0.22); border-color: rgba(0,220,150,0.4); }
+    .mp-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    #mp-code-box {
+      display: flex; align-items: center; gap: 14px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 12px; padding: 14px 22px;
+    }
+    .mp-code-lbl { font-size: 0.58rem; letter-spacing: 4px; color: rgba(255,255,255,0.35); margin-bottom: 4px; }
+    #mp-code-val { font-size: 2rem; font-weight: 700; letter-spacing: 14px; color: #fff; }
+    .mp-copy-btn {
+      background: rgba(255,255,255,0.1); border: none; border-radius: 6px;
+      color: rgba(255,255,255,0.65); padding: 7px 12px;
+      cursor: pointer; font-size: 0.72rem; font-family: inherit;
+    }
+    .mp-status { color: rgba(255,255,255,0.5); font-size: 0.78rem; letter-spacing: 2px; }
+    #mp-code-input {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.25); border-radius: 8px;
+      color: #fff; font-size: 1.8rem; font-weight: 700; letter-spacing: 12px;
+      text-align: center; width: 160px; padding: 10px 0;
+      font-family: inherit; text-transform: uppercase; outline: none;
+    }
+    #mp-code-input::placeholder { color: rgba(255,255,255,0.18); }
+    #mp-err { color: #ff6b6b; font-size: 0.78rem; letter-spacing: 1px; min-height: 1em; }
+    .mp-spinner {
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,0.15); border-top-color: rgba(255,255,255,0.7);
+      border-radius: 50%; animation: mp-spin 0.8s linear infinite;
+    }
+    @keyframes mp-spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -598,26 +652,66 @@
 
       <div id="lb-row"></div>
 
-      <div class="lb-tm-row">
-        <span class="lb-tm-label">Teammate</span>
-        <div class="lb-tm-toggle">
-          <button class="lb-tm-btn active" id="tm-yes">あり</button>
-          <button class="lb-tm-btn" id="tm-no">なし</button>
+      <!-- モード切替 -->
+      <div id="lb-mode-row">
+        <button class="lb-mode-btn active" id="mode-cpu">CPU対戦</button>
+        <button class="lb-mode-btn"        id="mode-real">リアル対戦</button>
+      </div>
+
+      <!-- CPU対戦コントロール -->
+      <div id="cpu-controls">
+        <div class="lb-tm-row">
+          <span class="lb-tm-label">Teammate</span>
+          <div class="lb-tm-toggle">
+            <button class="lb-tm-btn active" id="tm-yes">あり</button>
+            <button class="lb-tm-btn"        id="tm-no">なし</button>
+          </div>
+        </div>
+        <div class="lb-tm-row">
+          <span class="lb-tm-label">Field Size</span>
+          <div class="lb-tm-toggle">
+            <button class="lb-tm-btn active" id="fs-full">11v11</button>
+            <button class="lb-tm-btn"        id="fs-medium">8v8</button>
+            <button class="lb-tm-btn"        id="fs-compact">5v5</button>
+          </div>
+        </div>
+        <button id="lb-kickoff">KICK OFF</button>
+        <span class="lb-hint">← → で選択　　Enter でスタート</span>
+      </div>
+
+      <!-- リアル対戦パネル -->
+      <div id="mp-panel">
+        <!-- 1. 選択画面 -->
+        <div id="mp-choice" class="mp-btns">
+          <button class="mp-btn primary" id="mp-create">ルームを作る</button>
+          <button class="mp-btn"         id="mp-join-open">ルームに入る</button>
+        </div>
+        <!-- 2. ルーム作成・待機 -->
+        <div id="mp-waiting" style="display:none">
+          <div id="mp-code-box">
+            <div>
+              <div class="mp-code-lbl">ROOM CODE</div>
+              <div id="mp-code-val">----</div>
+            </div>
+            <button class="mp-copy-btn" id="mp-copy">コピー</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="mp-spinner"></div>
+            <span class="mp-status" id="mp-wait-txt">相手を待っています...</span>
+          </div>
+          <button class="mp-btn" id="mp-cancel">キャンセル</button>
+        </div>
+        <!-- 3. ルーム参加フォーム -->
+        <div id="mp-join-form" style="display:none">
+          <input id="mp-code-input" type="text" maxlength="4" placeholder="XXXX" autocomplete="off" spellcheck="false" />
+          <div id="mp-err"></div>
+          <div class="mp-btns">
+            <button class="mp-btn primary" id="mp-enter">入室</button>
+            <button class="mp-btn"         id="mp-back">戻る</button>
+          </div>
         </div>
       </div>
 
-      <div class="lb-tm-row">
-        <span class="lb-tm-label">Field Size</span>
-        <div class="lb-tm-toggle">
-          <button class="lb-tm-btn active" id="fs-full">11v11</button>
-          <button class="lb-tm-btn" id="fs-medium">8v8</button>
-          <button class="lb-tm-btn" id="fs-compact">5v5</button>
-        </div>
-      </div>
-
-      <button id="lb-kickoff">KICK OFF</button>
-
-      <span class="lb-hint">← → で選択　　Enter でスタート</span>
     </main>
   </div>
 
@@ -681,8 +775,10 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+      "three":            "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/":    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+      "firebase/app":      "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js",
+      "firebase/database": "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js"
     }
   }
   </script>

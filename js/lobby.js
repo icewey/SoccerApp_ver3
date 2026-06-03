@@ -1,4 +1,8 @@
 import { startGame } from './main.js';
+import {
+  createRoom, joinRoom, watchRoom, cleanupRoom,
+  publishPlayer, publishBall, publishScore, watchGame,
+} from './multiplayer.js';
 
 const CHARACTERS = [
   {
@@ -57,9 +61,12 @@ const CHARACTERS = [
   },
 ];
 
-let selectedIdx = 0;
+let selectedIdx  = 0;
 let withTeammate = true;
-let fieldSize = 'full';
+let fieldSize    = 'full';
+let mpMode       = false;   // true = リアル対戦モード
+let currentCode  = null;    // 作成/参加中のルームコード
+let roomWatcher  = null;    // Firebase unsubscribe 関数
 
 function buildCard(char, idx) {
   const card = document.createElement('div');
@@ -119,6 +126,51 @@ function render() {
   }
 }
 
+// リアル対戦UIをリセット
+function mpReset() {
+  currentCode = null;
+  roomWatcher = null;
+  document.getElementById('mp-choice').style.display    = '';
+  document.getElementById('mp-waiting').style.display   = 'none';
+  document.getElementById('mp-join-form').style.display = 'none';
+  document.getElementById('mp-code-val').textContent    = '----';
+  document.getElementById('mp-code-input').value        = '';
+  document.getElementById('mp-err').textContent         = '';
+  document.getElementById('mp-create').disabled         = false;
+  document.getElementById('mp-enter').disabled          = false;
+}
+
+// マルチプレイヤーゲーム開始
+function launchMultiplayer(role, code, hostInfo, guestInfo) {
+  const myChar     = CHARACTERS[selectedIdx];
+  const remoteCharFbx = role === 'host' ? guestInfo.charFbx : hostInfo.charFbx;
+  const fs         = hostInfo.fieldSize || 'compact';
+
+  requestFullscreen();
+
+  const lobby = document.getElementById('lobby');
+  lobby.style.opacity = '0';
+  lobby.style.pointerEvents = 'none';
+  setTimeout(() => { lobby.style.display = 'none'; }, 380);
+  document.getElementById('loading').style.display = 'flex';
+
+  startGame({
+    charFbx:      myChar.fbx,
+    withTeammate: false,
+    fieldSize:    fs,
+    enemyFbx:     null,
+    mp: {
+      role,
+      code,
+      remoteCharFbx,
+      publishPlayer: (r, s) => publishPlayer(code, r, s),
+      publishBall:   s      => publishBall(code, s),
+      publishScore:  s      => publishScore(code, s),
+      watchGame:     cb     => watchGame(code, cb),
+    },
+  });
+}
+
 function requestFullscreen() {
   const el = document.documentElement;
   const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
@@ -172,6 +224,91 @@ function init() {
   });
 
   document.getElementById('lb-kickoff').addEventListener('click', kickOff);
+
+  // ── モード切替 ───────────────────────────────────────────────────
+  function setMode(real) {
+    mpMode = real;
+    document.getElementById('mode-cpu').classList.toggle('active', !real);
+    document.getElementById('mode-real').classList.toggle('active',  real);
+    document.getElementById('cpu-controls').style.display = real ? 'none' : '';
+    document.getElementById('mp-panel').classList.toggle('open', real);
+    if (!real) mpReset();
+  }
+  document.getElementById('mode-cpu').addEventListener('click',  () => setMode(false));
+  document.getElementById('mode-real').addEventListener('click', () => setMode(true));
+
+  // ── リアル対戦: ルーム作成 ────────────────────────────────────────
+  document.getElementById('mp-create').addEventListener('click', async () => {
+    const char = CHARACTERS[selectedIdx];
+    if (!char.available) return;
+    document.getElementById('mp-create').disabled = true;
+    try {
+      const code = await createRoom({ charFbx: char.fbx, fieldSize });
+      currentCode = code;
+      document.getElementById('mp-code-val').textContent = code;
+      document.getElementById('mp-choice').style.display  = 'none';
+      document.getElementById('mp-waiting').style.display = '';
+      // ゲスト参加を待つ
+      roomWatcher = watchRoom(code, room => {
+        if (!room) { mpReset(); return; }
+        if (room.status === 'playing' && room.guest) {
+          roomWatcher?.();
+          launchMultiplayer('host', code, room.host, room.guest);
+        }
+      });
+    } catch (e) {
+      alert('ルーム作成に失敗しました: ' + e.message);
+      document.getElementById('mp-create').disabled = false;
+    }
+  });
+
+  // ── リアル対戦: ルーム参加フォーム表示 ───────────────────────────
+  document.getElementById('mp-join-open').addEventListener('click', () => {
+    document.getElementById('mp-choice').style.display    = 'none';
+    document.getElementById('mp-join-form').style.display = '';
+    document.getElementById('mp-code-input').focus();
+  });
+  document.getElementById('mp-back').addEventListener('click', () => {
+    document.getElementById('mp-join-form').style.display = 'none';
+    document.getElementById('mp-choice').style.display    = '';
+    document.getElementById('mp-err').textContent         = '';
+  });
+
+  // ── リアル対戦: 入室 ─────────────────────────────────────────────
+  document.getElementById('mp-enter').addEventListener('click', async () => {
+    const code = document.getElementById('mp-code-input').value.trim().toUpperCase();
+    const err  = document.getElementById('mp-err');
+    if (code.length !== 4) { err.textContent = 'コードは4文字です'; return; }
+    const char = CHARACTERS[selectedIdx];
+    if (!char.available) { err.textContent = 'キャラを選択してください'; return; }
+    document.getElementById('mp-enter').disabled = true;
+    err.textContent = '';
+    try {
+      const room = await joinRoom(code, { charFbx: char.fbx });
+      currentCode = code;
+      launchMultiplayer('guest', code, room.host, { charFbx: char.fbx });
+    } catch (e) {
+      err.textContent = e.message;
+      document.getElementById('mp-enter').disabled = false;
+    }
+  });
+  document.getElementById('mp-code-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('mp-enter').click();
+  });
+
+  // ── キャンセル ────────────────────────────────────────────────────
+  document.getElementById('mp-cancel').addEventListener('click', async () => {
+    roomWatcher?.();
+    if (currentCode) await cleanupRoom(currentCode);
+    mpReset();
+  });
+
+  // ── コードコピー ──────────────────────────────────────────────────
+  document.getElementById('mp-copy').addEventListener('click', () => {
+    navigator.clipboard?.writeText(currentCode ?? '');
+    document.getElementById('mp-copy').textContent = '✓';
+    setTimeout(() => { document.getElementById('mp-copy').textContent = 'コピー'; }, 1200);
+  });
 
   document.addEventListener('keydown', e => {
     const lobby = document.getElementById('lobby');
