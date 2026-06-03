@@ -78,6 +78,10 @@ export function watchGame(code, cb) {
 }
 
 // ── ルーム削除 ────────────────────────────────────────────────────
+export function publishEvent(code, event) {
+  set(ref(getDb(), `game/${code}/event`), event);
+}
+
 export async function cleanupRoom(code) {
   const db = getDb();
   await Promise.all([

@@ -1,7 +1,7 @@
 import { startGame } from './main.js';
 import {
   createRoom, joinRoom, watchRoom, cleanupRoom,
-  publishPlayer, publishBall, publishScore, watchGame,
+  publishPlayer, publishBall, publishScore, publishEvent, watchGame,
 } from './multiplayer.js';
 
 const CHARACTERS = [
@@ -166,6 +166,7 @@ function launchMultiplayer(role, code, hostInfo, guestInfo) {
       publishPlayer: (r, s) => publishPlayer(code, r, s),
       publishBall:   s      => publishBall(code, s),
       publishScore:  s      => publishScore(code, s),
+      publishEvent:  e      => publishEvent(code, e),
       watchGame:     cb     => watchGame(code, cb),
     },
   });

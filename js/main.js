@@ -780,6 +780,44 @@ function showGoalFlash(scorer) {
   });
 }
 
+function mpResetAfterGoal() {
+  // ホスト: 左側スタート(x<0)・+x向き  ゲスト: 右側スタート(x>0)・-x向き
+  const hostX  = -(FIELD_HALF_W * 0.35);
+  const guestX =  (FIELD_HALF_W * 0.35);
+
+  if (mpRole === 'host') {
+    player.position.set(hostX, groundY, 0);
+    player.rotation.y = -Math.PI / 2;   // +x方向
+    remotePeer.position.set(guestX, groundY, 0);
+  } else {
+    player.position.set(guestX, groundY, 0);
+    player.rotation.y = Math.PI / 2;    // -x方向
+    remotePeer.position.set(hostX, groundY, 0);
+  }
+
+  // ボールをセンターへ・バッファクリア
+  ballMesh.position.set(0, BALL_R, 0);
+  ballVel.set(0, 0, 0);
+  ballOwner = 'none';
+  mpRemoteBallOwner = 'none';
+  peerBuf.length = 0;
+  ballBuf.length = 0;
+
+  // 失点したプレイヤーがボールを持ってリスタート
+  // mpGoalScorer = 得点したロール → 私が失点 = mpGoalScorer !== mpRole
+  if (mpGoalScorer !== mpRole) {
+    ballOwner = 'player'; // 私がボールを保持
+  }
+
+  isDribbling = isKicking = isPassing = isTackling = isSpinning = false;
+  playerPickupCooldown = 0;
+  if (mixer)           { mixer.stopAllAction(); current = null; }
+  if (remotePeerMixer) { remotePeerMixer.stopAllAction(); remotePeerClipAct = {}; }
+  fadeToClip('idle');
+  fadeToRemoteClip('idle');
+  if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
+}
+
 function resetAfterGoal() {
   ballMesh.position.set(0, BALL_R, 0);
   ballVel.set(0, 0, 0);
@@ -822,14 +860,23 @@ function scoreGoal(scorer) {
   if (isGoalScene) return;
   isGoalScene = true;
   if (scorer === 'player') playerScore++; else cpuScore++;
-  // ボールをゴール内に固定
-  ballMesh.position.set(scorer === 'player' ? 53.2 : -53.2, BALL_R, 0);
+  ballMesh.position.set(scorer === 'player' ? GOAL_X + 0.7 : -(GOAL_X + 0.7), BALL_R, 0);
   ballVel.set(0, 0, 0);
   ballOwner = 'none';
   isDribbling = false;
   updateScoreDisplay();
   showGoalFlash(scorer);
-  setTimeout(() => { resetAfterGoal(); isGoalScene = false; }, 2500);
+  if (isMultiplayer) {
+    // scorer: 'player'=Hostが得点, 'cpu'=Guestが得点
+    const mpScorer = scorer === 'player' ? 'host' : 'guest';
+    mpGoalScorer   = mpScorer;
+    lastGoalSeq    = Date.now();
+    mpHandlers.publishEvent({ type: 'goal', scorer: mpScorer, seq: lastGoalSeq });
+    mpHandlers.publishScore({ host: playerScore, guest: cpuScore });
+    setTimeout(() => { mpResetAfterGoal(); isGoalScene = false; }, 2500);
+  } else {
+    setTimeout(() => { resetAfterGoal(); isGoalScene = false; }, 2500);
+  }
 }
 
 const loader = new FBXLoader();
@@ -858,7 +905,9 @@ let remotePeerMixer   = null;
 let remotePeerClipAct = {};
 let mpTimer              = 0;
 let gameWatcher          = null;
-let mpRemoteBallOwner    = 'none'; // 'host' | 'guest' | 'none'  Firebase上の所有者
+let mpRemoteBallOwner    = 'none'; // 'host' | 'guest' | 'none'
+let mpGoalScorer         = null;   // 直前のゴールを決めたロール ('host'|'guest')
+let lastGoalSeq          = 0;     // ゴールイベント重複処理防止
 
 // エンティティ補間バッファ（受信スナップショットをタイムスタンプ付きで保持）
 const INTERP_DELAY    = 120;   // ms: この分だけ過去を描画してスムーズに補間
@@ -930,6 +979,24 @@ function onCoreLoaded() {
           playerScore = data.score.guest ?? 0;
           cpuScore    = data.score.host  ?? 0;
           updateScoreDisplay();
+        }
+        // ゴールイベント受信（Guest側でリセット実行）
+        if (mpRole === 'guest' && data?.event?.type === 'goal'
+            && data.event.seq > lastGoalSeq) {
+          lastGoalSeq  = data.event.seq;
+          mpGoalScorer = data.event.scorer;
+          const localScorer = data.event.scorer === 'guest' ? 'player' : 'cpu';
+          if (!isGoalScene) {
+            isGoalScene = true;
+            ballMesh.position.set(
+              localScorer === 'player' ? GOAL_X + 0.7 : -(GOAL_X + 0.7), BALL_R, 0
+            );
+            ballVel.set(0, 0, 0);
+            ballOwner = 'none';
+            isDribbling = false;
+            showGoalFlash(localScorer);
+            setTimeout(() => { mpResetAfterGoal(); isGoalScene = false; }, 2500);
+          }
         }
       });
     }
