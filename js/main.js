@@ -184,11 +184,12 @@ const enemyGKChar   = { group: enemyGKGroup,  animState: null };
 const pGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0, catchAnimTimer: 0 };
 const eGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0, catchAnimTimer: 0 };
 
-const GK_SPEED        = 9.0;
+const GK_SPEED        = 6.0;  // 横追従速度（小さいほどボールに鈍感＝もっさり追う）
 const GK_X_OFFSET     = 2.0;
 const GK_PATROL_Z     = 2.5;
 const GK_CATCH_REACH  = 2.2;
-const GK_CATCH_CHANCE = 0.50;
+const GK_CATCH_CHANCE = 0.85;
+const GK_TURN_RATE    = 3.5;  // 体の向きの追従速度（小さいほど鈍感）
 const GK_HOLD_TIME    = 1.5;
 const GK_DIVE_Z_THR   = 1.5;
 
@@ -230,6 +231,27 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
   ballSpin.set(0, 0, 0);
   isDribbling = false;
   ballOwner   = 'none';
+}
+
+// ── プレイヤーのワンショット動作（キーボード・モバイル共通）────────────────
+// スピンを安全に終了（ボール喪失・シュート・時間切れ時に呼ぶ）。
+// isSpinning は本来スピンclipの'finished'で解除されるが、clipが中断されると
+// 取りこぼして固着し、自動前進が止まらなくなるため、明示終了経路を用意する。
+function endSpin() { isSpinning = false; spinTimer = 0; }
+
+function startSpin() {
+  if (!gameStarted || !isDribbling || isSpinning || !clips['spin'] || !mixer) return;
+  isSpinning = true;
+  spinTimer  = clips['spin'].duration; // 保険のタイマー
+  fadeToClip('spin', false);
+}
+
+function startKick(lofted, curve, power) {
+  if (!gameStarted || !clips['kick'] || !mixer) return;
+  endSpin();              // スピン中のシュートはスピンを打ち切ってから蹴る（状態固着防止）
+  isKicking = true;
+  fadeToClip('kick', false);
+  setTimeout(() => kickBall(lofted, curve, power), clips['kick'].duration * 0.55 * 1000);
 }
 
 // ── 敵シュート（charShoot を使用）────────────────────────────────────────
@@ -455,8 +477,10 @@ function updateBall(dt) {
     // ソロ専用: プレイヤー拾得・タックルはここで処理
     if (ballOwner === 'player' && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
     if (ballOwner === 'none') {
-      if      (distPlayer < DRIBBLE_DIST && !isKicking && !enemyKicking && playerPickupCooldown <= 0) ballOwner = 'player';
-      else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && enemyPickupCooldown <= 0)        ballOwner = 'enemy';
+      // プレイヤー拾得: CPUのキックアニメ中(enemyKicking)でもルーズボールを拾える
+      // ようにする（以前は !enemyKicking で約1秒間拾えず「取れない」原因だった）
+      if      (distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) ballOwner = 'player';
+      else if (hasEnemy && distEnemy < DRIBBLE_DIST && !isKicking && enemyPickupCooldown <= 0) ballOwner = 'enemy';
     }
     const TACKLE_DIST = 1.6;
     if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0
@@ -557,22 +581,10 @@ window.addEventListener('keydown', e => {
   // ワンショット動作はkeydownで即トリガー（animate()ループを待たない）
   if (gameStarted && !e.repeat) {
     if (e.code === 'KeyF' || e.code === 'KeyG') {
-      const lofted = e.code === 'KeyG';
-      isKicking = false;
-      if (clips['kick'] && mixer) {
-        isKicking = true;
-        fadeToClip('kick', false);
-        setTimeout(() => kickBall(lofted, 0, 1.0), clips['kick'].duration * 0.55 * 1000);
-      }
+      startKick(e.code === 'KeyG', 0, 1.0);
     }
     if (e.code === 'KeyH' || e.code === 'KeyJ') {
-      const curveDir = e.code === 'KeyH' ? -1 : 1;
-      isKicking = false;
-      if (clips['kick'] && mixer) {
-        isKicking = true;
-        fadeToClip('kick', false);
-        setTimeout(() => kickBall(false, curveDir, 1.0), clips['kick'].duration * 0.55 * 1000);
-      }
+      startKick(false, e.code === 'KeyH' ? -1 : 1, 1.0);
     }
     if (e.code === 'KeyT' && ballOwner !== 'player' && !isTackling) {
       // タックル（ボール非所持時のみ）
@@ -581,12 +593,8 @@ window.addEventListener('keydown', e => {
         fadeToClip('tackle', false);
       }
     }
-    if (e.code === 'KeyZ' && isDribbling && !isSpinning) {
-      // スピン（ドリブル中のみ）
-      if (clips['spin'] && mixer) {
-        isSpinning = true;
-        fadeToClip('spin', false);
-      }
+    if (e.code === 'KeyZ') {
+      startSpin(); // スピン（ドリブル中のみ・内部でガード）
     }
   }
 }, { capture: true }); // captureでブラウザより先にキーを受け取る
@@ -608,6 +616,7 @@ let isKicking   = false;
 let isPassing   = false;
 let isTackling  = false;
 let isSpinning  = false;
+let spinTimer   = 0; // スピン残り時間（finishedイベント取りこぼし対策の保険）
 let groundY     = 0;
 let playerScore = 0;
 let cpuScore    = 0;
@@ -689,7 +698,7 @@ function gkMoveTo(char, targetPos, dt) {
   if (dist < 0.25) return false;
   to.divideScalar(dist);
   char.group.position.addScaledVector(to, Math.min(dist, GK_SPEED * dt));
-  char.group.rotation.y = Math.atan2(-to.x, -to.z);
+  // 向きは updateGK 側で滑らかに制御するためここでは設定しない
   return true;
 }
 
@@ -792,16 +801,20 @@ function updateGK(gkChar, gkSt, myGoalX, teammateChar, ownerKey, dt) {
   const moved = gkMoveTo(gkChar, new THREE.Vector3(standX, 0, targetZ), dt);
   charAnim(gkChar, moved ? 'gk_sidestep' : 'idle');
 
-  // 体の向き（gkMoveTo が設定した向きを上書き）
+  // 体の向き: 目標角へ滑らかに追従（GK_TURN_RATE が小さいほど鈍感）
+  let targetRy;
   if (ballInOwnHalf) {
     const toBall = new THREE.Vector3().subVectors(ballMesh.position, gkPos).setY(0);
-    if (toBall.lengthSq() > 0.01) {
-      toBall.normalize();
-      gkChar.group.rotation.y = Math.atan2(-toBall.x, -toBall.z);
-    }
+    targetRy = toBall.lengthSq() > 0.01
+      ? Math.atan2(-toBall.x, -toBall.z)
+      : gkChar.group.rotation.y;
   } else {
-    gkChar.group.rotation.y = myGoalX > 0 ? Math.PI / 2 : -Math.PI / 2;
+    targetRy = myGoalX > 0 ? Math.PI / 2 : -Math.PI / 2;
   }
+  let dRy = targetRy - gkChar.group.rotation.y;
+  while (dRy >  Math.PI) dRy -= 2 * Math.PI;
+  while (dRy < -Math.PI) dRy += 2 * Math.PI;
+  gkChar.group.rotation.y += dRy * Math.min(1, GK_TURN_RATE * dt);
 
   // ── 反射セーブ：棒立ちのまま、手の届く範囲にシュートが来たら
   //    キャッチ（正面）/ ダイブ（左右）を試みる ──────────────────────
@@ -887,6 +900,7 @@ function mpResetAfterGoal() {
   }
 
   isDribbling = isKicking = isPassing = isTackling = isSpinning = false;
+  spinTimer = 0;
   playerPickupCooldown = 0;
   if (mixer)           { mixer.stopAllAction(); current = null; }
   if (remotePeerMixer) { remotePeerMixer.stopAllAction(); remotePeerClipAct = {}; }
@@ -903,6 +917,7 @@ function resetAfterGoal() {
   gkBallHolder = 'none';
   isDribbling  = false;
   isKicking = isPassing = isTackling = isSpinning = false;
+  spinTimer = 0;
   playerPickupCooldown = 0;
 
   pGKSt.state = 'patrol'; pGKSt.holdTimer = 0; pGKSt.patrolPhase = 0;
@@ -1605,6 +1620,13 @@ function animate() {
       }
     }
 
+    // スピン終了判定: 時間切れ or ボールを失ったら終了（finishedイベントの
+    // 取りこぼしで isSpinning が固着し、自動前進が止まらなくなるのを防ぐ）
+    if (isSpinning) {
+      spinTimer -= dt;
+      if (spinTimer <= 0 || ballOwner !== 'player') endSpin();
+    }
+
     // タックル/スピン中は向いてる方向に自動前進
     if (isTackling || isSpinning) {
       const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
@@ -1735,16 +1757,11 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     if (!el) return;
     el.addEventListener('touchstart', e => {
       e.preventDefault();
-      if (gameStarted && clips['kick'] && mixer) {
-        const joyMag = joystick.active
-          ? Math.min(1, Math.sqrt(joystick.dx ** 2 + joystick.dy ** 2))
-          : 1.0;
-        const power = 0.6 + 0.9 * joyMag; // 0.6(最弱)〜1.5(最強)
-        isKicking = false;
-        isKicking = true;
-        fadeToClip('kick', false);
-        setTimeout(() => kickBall(lofted, curve, power), clips['kick'].duration * 0.55 * 1000);
-      }
+      const joyMag = joystick.active
+        ? Math.min(1, Math.sqrt(joystick.dx ** 2 + joystick.dy ** 2))
+        : 1.0;
+      const power = 0.6 + 0.9 * joyMag; // 0.6(最弱)〜1.5(最強)
+      startKick(lofted, curve, power);
     }, { passive: false });
   }
   setupKickBtn('btn-kick',        false,  0);
@@ -1769,10 +1786,7 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
   if (spinBtn) {
     spinBtn.addEventListener('touchstart', e => {
       e.preventDefault();
-      if (gameStarted && isDribbling && !isSpinning && clips['spin'] && mixer) {
-        isSpinning = true;
-        fadeToClip('spin', false);
-      }
+      startSpin();
     }, { passive: false });
   }
 
