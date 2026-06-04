@@ -250,8 +250,16 @@ function startKick(lofted, curve, power) {
   if (!gameStarted || !clips['kick'] || !mixer) return;
   endSpin();              // スピン中のシュートはスピンを打ち切ってから蹴る（状態固着防止）
   isKicking = true;
+  kickTimer = clips['kick'].duration + 0.1; // finished取りこぼし時の保険
   fadeToClip('kick', false);
   setTimeout(() => kickBall(lofted, curve, power), clips['kick'].duration * 0.55 * 1000);
+}
+
+function startTackle() {
+  if (!gameStarted || ballOwner === 'player' || isTackling || !clips['tackle'] || !mixer) return;
+  isTackling  = true;
+  tackleTimer = TACKLE_LOCK; // 短い前進ランジ。タイマーで必ず解除しclip中断による固着を防ぐ
+  fadeToClip('tackle', false);
 }
 
 // ── 敵シュート（charShoot を使用）────────────────────────────────────────
@@ -586,12 +594,8 @@ window.addEventListener('keydown', e => {
     if (e.code === 'KeyH' || e.code === 'KeyJ') {
       startKick(false, e.code === 'KeyH' ? -1 : 1, 1.0);
     }
-    if (e.code === 'KeyT' && ballOwner !== 'player' && !isTackling) {
-      // タックル（ボール非所持時のみ）
-      if (clips['tackle'] && mixer) {
-        isTackling = true;
-        fadeToClip('tackle', false);
-      }
+    if (e.code === 'KeyT') {
+      startTackle(); // タックル（ボール非所持時のみ・内部でガード）
     }
     if (e.code === 'KeyZ') {
       startSpin(); // スピン（ドリブル中のみ・内部でガード）
@@ -617,6 +621,8 @@ let isPassing   = false;
 let isTackling  = false;
 let isSpinning  = false;
 let spinTimer   = 0; // スピン残り時間（finishedイベント取りこぼし対策の保険）
+let tackleTimer = 0; // タックル残り時間（同上。割り込みで操作不能になるのを防ぐ）
+let kickTimer   = 0; // キック残り時間（同上の保険）
 let groundY     = 0;
 let playerScore = 0;
 let cpuScore    = 0;
@@ -900,7 +906,7 @@ function mpResetAfterGoal() {
   }
 
   isDribbling = isKicking = isPassing = isTackling = isSpinning = false;
-  spinTimer = 0;
+  spinTimer = tackleTimer = kickTimer = 0;
   playerPickupCooldown = 0;
   if (mixer)           { mixer.stopAllAction(); current = null; }
   if (remotePeerMixer) { remotePeerMixer.stopAllAction(); remotePeerClipAct = {}; }
@@ -917,7 +923,7 @@ function resetAfterGoal() {
   gkBallHolder = 'none';
   isDribbling  = false;
   isKicking = isPassing = isTackling = isSpinning = false;
-  spinTimer = 0;
+  spinTimer = tackleTimer = kickTimer = 0;
   playerPickupCooldown = 0;
 
   pGKSt.state = 'patrol'; pGKSt.holdTimer = 0; pGKSt.patrolPhase = 0;
@@ -1391,8 +1397,9 @@ export function startGame(config) {
 
 // ── Character Control ─────────────────────────────────────────────────────
 const MOVE_SPEED   = 8;
-const RUN_SPEED    = 14;
+const RUN_SPEED    = 11;   // 通常移動速度（少し遅く）
 const TURN_SPEED   = 1.2;
+const TACKLE_LOCK  = 0.7;  // タックルの操作ロック時間（clip全長1.77sは長すぎるため短い前進ランジに）
 let FIELD_HALF_W = 51;
 let FIELD_HALF_D = 33;
 let GOAL_X       = 52.5;
@@ -1620,11 +1627,20 @@ function animate() {
       }
     }
 
-    // スピン終了判定: 時間切れ or ボールを失ったら終了（finishedイベントの
-    // 取りこぼしで isSpinning が固着し、自動前進が止まらなくなるのを防ぐ）
+    // ワンショット動作の終了をタイマーで保証する。finishedイベントは別アニメへの
+    // 割り込み(例: タックル中にシュート)で取りこぼされ、フラグが固着して操作不能に
+    // なるため、時間で必ず解除する。
     if (isSpinning) {
       spinTimer -= dt;
       if (spinTimer <= 0 || ballOwner !== 'player') endSpin();
+    }
+    if (isTackling) {
+      tackleTimer -= dt;
+      if (tackleTimer <= 0) isTackling = false;
+    }
+    if (isKicking) {
+      kickTimer -= dt;
+      if (kickTimer <= 0) isKicking = false;
     }
 
     // タックル/スピン中は向いてる方向に自動前進
@@ -1774,10 +1790,7 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
   if (tackleBtn) {
     tackleBtn.addEventListener('touchstart', e => {
       e.preventDefault();
-      if (gameStarted && ballOwner !== 'player' && !isTackling && clips['tackle'] && mixer) {
-        isTackling = true;
-        fadeToClip('tackle', false);
-      }
+      startTackle();
     }, { passive: false });
   }
 
