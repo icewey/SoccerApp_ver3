@@ -390,6 +390,14 @@ function updateEnemy(dt) {
     }
   }
 
+  // 自陣GKがキャッチ保持中は、スローを受けて速攻するため敵ゴール方向へ進出する。
+  // （ボールを取りに自陣GKへ戻らず、前方=スロー到達範囲のミッドフィールドで待つ）
+  if (gkBallHolder === 'enemy_gk') {
+    enemyState = 'chase';
+    targetPos = new THREE.Vector3(GOAL_X - 35, 0, enemy.position.z * 0.5);
+    enemyTackling = false;
+  }
+
   // 移動（charMoveTo = プレイヤーと同じ RUN_SPEED）
   const moving = !enemyTackling && !enemyKicking && charMoveTo(enemyChar, targetPos, dt);
 
@@ -921,7 +929,7 @@ function mpResetAfterGoal() {
   if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
 }
 
-function resetAfterGoal() {
+function resetAfterGoal(scorer) {
   ballMesh.position.set(0, BALL_R, 0);
   ballVel.set(0, 0, 0);
   ballCurveRate = 0;
@@ -947,23 +955,39 @@ function resetAfterGoal() {
     charAnim(enemyGKChar, 'idle');
   }
 
-  player.position.set(0, groundY, 0);
-  player.rotation.y = 0;
-
   if (mixer) { mixer.stopAllAction(); current = null; }
-  fadeToClip('idle');
-
   if (hasEnemy) {
-    enemy.position.set(-10, groundY, 0);
-    enemy.rotation.y = 0;
-    enemyState          = 'chase';
-    enemyTackling       = false;
-    enemyKicking        = false;
-    enemyPickupCooldown = 0;
-    enemyTackleCooldown = 0;
+    enemyTackling = enemyKicking = false;
+    enemyPickupCooldown = enemyTackleCooldown = 0;
     if (enemyMixer) { enemyMixer.stopAllAction(); enemyCurrent = null; }
-    fadeToEnemyClip('idle');
   }
+
+  // ── キックオフ: 失点した側がボールを持って中央からスタート ──────────────
+  // scorer='player'(プレイヤー得点)=CPU失点 → CPUがキックオフ
+  // scorer='cpu'(CPU得点)=プレイヤー失点 → プレイヤーがキックオフ
+  const playerConceded = scorer === 'cpu';
+  if (playerConceded || !hasEnemy) {
+    // プレイヤーがキックオフ（中央でボール保持）
+    player.position.set(0, groundY, 0);
+    player.rotation.y = -Math.PI / 2;       // 攻撃方向(+x)を向く
+    ballMesh.position.set(0, BALL_R, 0);
+    ballOwner   = 'player';
+    isDribbling = true;
+    if (hasEnemy) { enemy.position.set(14, groundY, 0); enemy.rotation.y = Math.PI / 2; enemyState = 'chase'; }
+  } else {
+    // CPUがキックオフ（中央でボール保持して速攻開始）
+    enemy.position.set(0, groundY, 0);
+    enemy.rotation.y = Math.PI / 2;          // 攻撃方向(-x)を向く
+    ballMesh.position.set(0, BALL_R, 0);
+    ballOwner   = 'enemy';
+    enemyState  = 'dribble';
+    isDribbling = false;
+    player.position.set(-14, groundY, 0);
+    player.rotation.y = -Math.PI / 2;        // 中央(+x)を向いて守備
+  }
+
+  fadeToClip('idle');
+  if (hasEnemy) fadeToEnemyClip('idle');
 
   if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
 }
@@ -987,7 +1011,7 @@ function scoreGoal(scorer) {
     mpHandlers.publishScore({ host: playerScore, guest: cpuScore });
     setTimeout(() => { mpResetAfterGoal(); isGoalScene = false; }, 2500);
   } else {
-    setTimeout(() => { resetAfterGoal(); isGoalScene = false; }, 2500);
+    setTimeout(() => { resetAfterGoal(scorer); isGoalScene = false; }, 2500);
   }
 }
 
