@@ -695,6 +695,34 @@ function stripRootMotion(clip) {
   return clip;
 }
 
+// ── 別スケルトン（Meshy "Newton" 系）のクリップを Mixamo 骨名へリターゲット ──
+// ヒールリフト.fbx は Newton リグ（接頭辞なし・Spine4本・Thigh/Shin）で作られており、
+// キャラ(mixamorig:*)と骨名が一致せず Mixer が適用できず T ポーズになる。
+// 回転トラックのみを mixamorig 骨名へ付け替える（位置/スケールは骨長差で歪むため捨てる）。
+const NEWTON_TO_MIXAMO = {
+  Hips: 'Hips',
+  Spine1: 'Spine', Spine2: 'Spine1', Spine3: 'Spine2', // Spine4 は対応なし→破棄
+  Neck: 'Neck', Head: 'Head', HeadTip: 'HeadTop',
+  LeftShoulder: 'LeftShoulder', LeftArm: 'LeftArm', LeftForeArm: 'LeftForeArm', LeftHand: 'LeftHand',
+  RightShoulder: 'RightShoulder', RightArm: 'RightArm', RightForeArm: 'RightForeArm', RightHand: 'RightHand',
+  LeftThigh: 'LeftUpLeg', LeftShin: 'LeftLeg', LeftFoot: 'LeftFoot', LeftToe: 'LeftToeBase', LeftToeTip: 'LeftToe',
+  RightThigh: 'RightUpLeg', RightShin: 'RightLeg', RightFoot: 'RightFoot', RightToe: 'RightToeBase', RightToeTip: 'RightToe',
+};
+function retargetNewtonToMixamo(clip) {
+  const out = [];
+  for (const t of clip.tracks) {
+    if (!t.name.endsWith('.quaternion')) continue; // 回転のみ採用
+    const dot  = t.name.lastIndexOf('.');
+    const node = t.name.slice(0, dot).replace(/_Skele$/, '');
+    const map  = NEWTON_TO_MIXAMO[node];
+    if (!map) continue;                 // 対応骨なし→破棄
+    t.name = `mixamorig:${map}.quaternion`;
+    out.push(t);
+  }
+  clip.tracks = out;
+  return clip;
+}
+
 // ── アニメ状態プロキシ（getter/setter で let 変数を共有参照）─────────────
 const playerAnim = {
   get mixer()   { return mixer; },        set mixer(v)   { mixer = v; },
@@ -1575,7 +1603,9 @@ export function startGame(config) {
   ANIM_FILES.forEach(([name, path]) => {
     loader.load(path, fbx => {
       if (fbx.animations.length) {
-        const clip = stripRootMotion(fbx.animations[0]);
+        let clip = stripRootMotion(fbx.animations[0]);
+        // ヒールリフトは別リグ(Newton)製のため Mixamo 骨名へリターゲットする
+        if (name === 'heel') clip = retargetNewtonToMixamo(clip);
         clip.name = name;
         clips[name] = clip;
       } else {
