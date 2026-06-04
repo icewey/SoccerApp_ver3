@@ -72,7 +72,8 @@ function buildField(halfW, halfD) {
     const ox  = s * goalX;
     const pd  = 16.5 * sc, phz = 20.16 * sc; // ペナルティエリア
     const gd  = 5.5  * sc, ghz = 9.16  * sc; // ゴールエリア
-    const ghw = 3.66 * sc;                    // ゴール半幅
+    const ghw = 3.66;                         // ゴール半幅（フィールドサイズに関わらず11v11固定）
+    const gdp = 2.2;                          // ゴールネットの奥行き（固定）
 
     line(pd * 2, 0.18, ox - s * pd, phz);  line(pd * 2, 0.18, ox - s * pd, -phz);
     line(0.18, phz * 2, ox - s * pd * 2, 0);
@@ -91,15 +92,15 @@ function buildField(halfW, halfD) {
     const netMat = new THREE.LineBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.5 });
     const pts = [];
     const seg = (ax,ay,az,bx,by,bz) => { pts.push(new THREE.Vector3(ax,ay,az), new THREE.Vector3(bx,by,bz)); };
-    const HW = ghw, H = 2.44, backX = ox + s * 2.2 * sc;
+    const HW = ghw, H = 2.44, backX = ox + s * gdp;
     for (let i=0;i<=8;i++) { const z=-HW+(HW*2/8)*i; seg(backX,0,z,backX,H,z); }
     for (let j=0;j<=5;j++) { const y=(H/5)*j;         seg(backX,y,-HW,backX,y,HW); }
     for (let i=0;i<=8;i++) { const z=-HW+(HW*2/8)*i; seg(ox,H,z,backX,H,z); }
-    for (let k=0;k<=3;k++) { const x=ox+(s*2.2*sc/3)*k; seg(x,H,-HW,x,H,HW); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*gdp/3)*k; seg(x,H,-HW,x,H,HW); }
     for (let j=0;j<=5;j++) { const y=(H/5)*j;         seg(ox,y,-HW,backX,y,-HW); }
-    for (let k=0;k<=3;k++) { const x=ox+(s*2.2*sc/3)*k; seg(x,0,-HW,x,H,-HW); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*gdp/3)*k; seg(x,0,-HW,x,H,-HW); }
     for (let j=0;j<=5;j++) { const y=(H/5)*j;         seg(ox,y,HW,backX,y,HW); }
-    for (let k=0;k<=3;k++) { const x=ox+(s*2.2*sc/3)*k; seg(x,0,HW,x,H,HW); }
+    for (let k=0;k<=3;k++) { const x=ox+(s*gdp/3)*k; seg(x,0,HW,x,H,HW); }
     root.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), netMat));
   });
   return root;
@@ -1333,7 +1334,7 @@ export function startGame(config) {
   FIELD_HALF_W = fs.halfW;
   FIELD_HALF_D = fs.halfD - 1;
   GOAL_X       = fs.halfW + 1.5;
-  GOAL_HALF_Z  = 3.66 * (fs.halfW / 51);
+  GOAL_HALF_Z  = 3.66; // ゴール幅はフィールドサイズに関わらず11v11固定（小フィールドで点が入らない問題を解消）
   scene.remove(fieldRoot);
   fieldRoot = buildField(fs.halfW, fs.halfD);
   scene.add(fieldRoot);
