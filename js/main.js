@@ -248,33 +248,6 @@ function startSpin() {
   fadeToClip('spin', false);
 }
 
-// ヒールリフト（レインボーフリック）: ドリブル中、ボールを自分の後ろから
-// 弧を描いて頭上を越えさせ、前方へ落とす技。
-const HEEL_UP_SPEED   = 9.5;  // 上向き初速（頭上を越える高さ）
-const HEEL_FWD_SPEED  = 4.0;  // 前方初速（前に落とす距離）
-const HEEL_BACK_OFF   = 0.5;  // 発射時にボールを置く後方オフセット
-function startHeelLift() {
-  if (!gameStarted || !isDribbling || isHeelLift || !clips['heel'] || !mixer) return;
-  if (isSpinning || isKicking || isPassing || isTackling) return;
-  isHeelLift = true;
-  heelTimer  = clips['heel'].duration + 0.1; // finished取りこぼし時の保険
-  fadeToClip('heel', false);
-  // フリックの瞬間（アニメ中盤）にボールを後方へ置いて前方上空へ蹴り上げる
-  setTimeout(() => {
-    if (!isHeelLift || ballOwner !== 'player') return;
-    const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
-    // ボールを足の後ろに移してから、前方かつ上方へ弧を描かせる
-    ballMesh.position.copy(player.position).addScaledVector(facing, -HEEL_BACK_OFF);
-    ballMesh.position.y = 0.3;
-    ballVel.set(facing.x * HEEL_FWD_SPEED, HEEL_UP_SPEED, facing.z * HEEL_FWD_SPEED);
-    ballSpin.set(0, 0, 0);
-    ballCurveRate = 0;
-    ballOwner   = 'none';
-    isDribbling = false;
-    playerPickupCooldown = 0.8; // ボールが頭上を越え前に落ちるまで再拾いを防ぐ
-  }, clips['heel'].duration * 0.4 * 1000);
-}
-
 function startKick(lofted, curve, power) {
   if (!gameStarted || !clips['kick'] || !mixer) return;
   endSpin();              // スピン中のシュートはスピンを打ち切ってから蹴る（状態固着防止）
@@ -645,9 +618,6 @@ window.addEventListener('keydown', e => {
     if (e.code === 'KeyZ') {
       startSpin(); // スピン（ドリブル中のみ・内部でガード）
     }
-    if (e.code === 'KeyX') {
-      startHeelLift(); // ヒールリフト（ドリブル中のみ・内部でガード）
-    }
   }
 }, { capture: true }); // captureでブラウザより先にキーを受け取る
 
@@ -668,11 +638,9 @@ let isKicking   = false;
 let isPassing   = false;
 let isTackling  = false;
 let isSpinning  = false;
-let isHeelLift  = false; // ヒールリフト（レインボーフリック）実行中
 let spinTimer   = 0; // スピン残り時間（finishedイベント取りこぼし対策の保険）
 let tackleTimer = 0; // タックル残り時間（同上。割り込みで操作不能になるのを防ぐ）
 let kickTimer   = 0; // キック残り時間（同上の保険）
-let heelTimer   = 0; // ヒールリフト残り時間（同上の保険）
 let groundY     = 0;
 let playerScore = 0;
 let cpuScore    = 0;
@@ -972,8 +940,8 @@ function mpResetAfterGoal() {
     ballOwner = 'player'; // 私がボールを保持
   }
 
-  isDribbling = isKicking = isPassing = isTackling = isSpinning = isHeelLift = false;
-  spinTimer = tackleTimer = kickTimer = heelTimer = 0;
+  isDribbling = isKicking = isPassing = isTackling = isSpinning = false;
+  spinTimer = tackleTimer = kickTimer = 0;
   playerPickupCooldown = 0;
   if (mixer)           { mixer.stopAllAction(); current = null; }
   if (remotePeerMixer) { remotePeerMixer.stopAllAction(); remotePeerClipAct = {}; }
@@ -989,8 +957,8 @@ function resetAfterGoal(scorer) {
   ballOwner    = 'none';
   gkBallHolder = 'none';
   isDribbling  = false;
-  isKicking = isPassing = isTackling = isSpinning = isHeelLift = false;
-  spinTimer = tackleTimer = kickTimer = heelTimer = 0;
+  isKicking = isPassing = isTackling = isSpinning = false;
+  spinTimer = tackleTimer = kickTimer = 0;
   playerPickupCooldown = 0;
 
   pGKSt.state = 'patrol'; pGKSt.holdTimer = 0; pGKSt.patrolPhase = 0;
@@ -1097,8 +1065,8 @@ function pkPlaceForKick() {
   ballVel.set(0, 0, 0); ballCurveRate = 0;
   ballOwner = 'player'; isDribbling = true;
   gkBallHolder = 'none';
-  isKicking = isPassing = isTackling = isSpinning = isHeelLift = false;
-  spinTimer = tackleTimer = kickTimer = heelTimer = 0;
+  isKicking = isPassing = isTackling = isSpinning = false;
+  spinTimer = tackleTimer = kickTimer = 0;
   playerPickupCooldown = 0;
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.catchAnimTimer = 0;
   if (enemyGKMixer) {
@@ -1171,7 +1139,6 @@ const ANIM_FILES = [
   ['pass',    './animations/Pass.fbx'],
   ['tackle',  './animations/Tackle.fbx'],
   ['spin',       './animations/Spin.fbx'],
-  ['heel',       './animations/HeelLift_mixamo.fbx'],
   ['gk_sidestep','./animations/Goalkeeper Sidestep.fbx'],
   ['gk_catch',   './animations/Goalkeeper Catch.fbx'],
   ['gk_dive',    './animations/Goalkeeper Diving Save.fbx'],
@@ -1454,7 +1421,6 @@ export function startGame(config) {
         if (clips['pass']    && e.action === mixer.clipAction(clips['pass']))    isPassing  = false;
         if (clips['tackle']  && e.action === mixer.clipAction(clips['tackle']))  isTackling = false;
         if (clips['spin']    && e.action === mixer.clipAction(clips['spin']))    isSpinning = false;
-        if (clips['heel']    && e.action === mixer.clipAction(clips['heel']))    isHeelLift = false;
       });
 
       onCoreLoaded();
@@ -1602,7 +1568,7 @@ let GOAL_HALF_Z  = 3.66;
 const smoothCamTarget = new THREE.Vector3(0, 1, 0);
 
 function getDesiredAnim() {
-  if (isKicking || isPassing || isTackling || isHeelLift) return null;
+  if (isKicking || isPassing || isTackling) return null;
   if (isSpinning && isDribbling) return 'spin';
   const fwd    = keys.has('KeyW') || keys.has('ArrowUp');
   const bwd    = keys.has('KeyS') || keys.has('ArrowDown');
@@ -1775,7 +1741,7 @@ function animate() {
     const anim = getDesiredAnim();
     if (anim) fadeToClip(anim);
 
-    if (!isKicking && !isPassing && !isTackling && !isSpinning && !isHeelLift) {
+    if (!isKicking && !isPassing && !isTackling && !isSpinning) {
       // 視線回転: Q/E キー
       if (keys.has('KeyQ')) viewAngle += TURN_SPEED * dt;
       if (keys.has('KeyE')) viewAngle -= TURN_SPEED * dt;
@@ -1839,10 +1805,6 @@ function animate() {
     if (isKicking) {
       kickTimer -= dt;
       if (kickTimer <= 0) isKicking = false;
-    }
-    if (isHeelLift) {
-      heelTimer -= dt;
-      if (heelTimer <= 0 || ballOwner === 'enemy') isHeelLift = false;
     }
 
     // タックル/スピン中は向いてる方向に自動前進
@@ -2005,15 +1967,6 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     }, { passive: false });
   }
 
-  // ヒールリフトボタン（ドリブル中のみ有効）
-  const heelBtn = document.getElementById('btn-heel');
-  if (heelBtn) {
-    heelBtn.addEventListener('touchstart', e => {
-      e.preventDefault();
-      startHeelLift();
-    }, { passive: false });
-  }
-
   // ボール所持状態に応じてボタン表示切替
   function updateMobileButtons() {
     const hasBall = ballOwner === 'player';
@@ -2023,7 +1976,6 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     });
     if (tackleBtn) tackleBtn.style.display = hasBall ? 'none' : '';
     if (spinBtn)   spinBtn.style.display   = hasBall ? '' : 'none';
-    if (heelBtn)   heelBtn.style.display   = hasBall ? '' : 'none';
   }
   // animate() から呼べるようにグローバル化
   window._updateMobileButtons = updateMobileButtons;
