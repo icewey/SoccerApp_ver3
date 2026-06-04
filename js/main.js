@@ -184,11 +184,12 @@ const enemyGKChar   = { group: enemyGKGroup,  animState: null };
 const pGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0, catchAnimTimer: 0 };
 const eGKSt = { state: 'patrol', holdTimer: 0, patrolPhase: 0, catchAnimTimer: 0 };
 
-const GK_SPEED        = 6.0;  // 横追従速度（小さいほどボールに鈍感＝もっさり追う）
+const GK_SPEED        = 2.5;  // 横追従速度（遅いので飛行中に隅まで追いつけない＝隅を狙えば抜ける）
 const GK_X_OFFSET     = 2.0;
 const GK_PATROL_Z     = 2.5;
-const GK_CATCH_REACH  = 2.2;
+const GK_CATCH_REACH  = 1.4;  // 反射セーブの届く範囲（中央は守るが隅は抜ける幅）
 const GK_CATCH_CHANCE = 0.85;
+const GK_SAVE_DEPTH   = 1.5;  // ゴールラインからこの距離以内でのみセーブ発動（手前で拾わない＝隅に逸れた所で間に合わない）
 const GK_TURN_RATE    = 3.5;  // 体の向きの追従速度（小さいほど鈍感）
 const GK_HOLD_TIME    = 1.5;
 const GK_DIVE_Z_THR   = 1.5;
@@ -268,7 +269,10 @@ function enemyShoot() {
     enemyChar, 'enemy', -GOAL_X,
     () => enemyKicking,
     v  => { enemyKicking = v; },
-    () => { enemyPickupCooldown = 1.5; enemyState = 'chase'; }
+    // ボールを蹴り出した瞬間に enemyKicking を解除する。'finished' 頼みだと、
+    // 直後にルーズボールを奪われ敵が即タックル(charAnim)へ移ってキックclipが
+    // 中断され、'finished' を取りこぼして enemyKicking が固着→敵フリーズしていた。
+    () => { enemyKicking = false; enemyPickupCooldown = 1.5; enemyState = 'chase'; }
   );
 }
 
@@ -376,8 +380,10 @@ function updateEnemy(dt) {
   } else {
     // ボールを追う
     targetPos = new THREE.Vector3(ballMesh.position.x, 0, ballMesh.position.z);
-    // タックル（プレイヤーと同じ距離で試みる）
-    if (ballOwner === 'player' && distToBall < 3.0 && !enemyTackling && enemyTackleCooldown <= 0) {
+    // タックル（プレイヤーと同じ距離で試みる）。キック中(enemyKicking)は
+    // キックclipを中断して状態が固着するため開始しない。
+    if (ballOwner === 'player' && distToBall < 3.0 && !enemyTackling && !enemyKicking
+        && enemyTackleCooldown <= 0) {
       enemyTackling = true;
       enemyTackleCooldown = ENEMY_TACKLE_COOLDOWN;
       charAnim(enemyChar, 'tackle', false);
@@ -825,8 +831,8 @@ function updateGK(gkChar, gkSt, myGoalX, teammateChar, ownerKey, dt) {
   // ── 反射セーブ：棒立ちのまま、手の届く範囲にシュートが来たら
   //    キャッチ（正面）/ ダイブ（左右）を試みる ──────────────────────
   const inSaveX = myGoalX > 0
-    ? (ballMesh.position.x > myGoalX - 4.5 && ballMesh.position.x < myGoalX + 0.5)
-    : (ballMesh.position.x < myGoalX + 4.5 && ballMesh.position.x > myGoalX - 0.5);
+    ? (ballMesh.position.x > myGoalX - GK_SAVE_DEPTH && ballMesh.position.x < myGoalX + 0.5)
+    : (ballMesh.position.x < myGoalX + GK_SAVE_DEPTH && ballMesh.position.x > myGoalX - 0.5);
   const inSaveZ = Math.abs(ballMesh.position.z - gkPos.z) < GK_CATCH_REACH;
   const inSaveY = ballMesh.position.y < 3.0;
   const ballComingIn = myGoalX > 0 ? ballVel.x > 1.0 : ballVel.x < -1.0;
