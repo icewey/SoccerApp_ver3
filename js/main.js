@@ -566,8 +566,8 @@ function updateBall(dt) {
   const _inGoalZ = Math.abs(ballMesh.position.z) < GOAL_HALF_Z;
   const _inGoalY = ballMesh.position.y < 2.44 + BALL_R;
   if (_inGoalZ && _inGoalY) {
-    if      (ballMesh.position.x >  GOAL_X) { scoreGoal('player'); return; }
-    else if (ballMesh.position.x < -GOAL_X) { scoreGoal('cpu');    return; }
+    if      (ballMesh.position.x >  GOAL_X) { if (isPK) pkResolve('goal'); else scoreGoal('player'); return; }
+    else if (ballMesh.position.x < -GOAL_X) { if (!isPK) scoreGoal('cpu'); return; }
   }
   if (Math.abs(ballMesh.position.x) > FIELD_HALF_W + 1 && !(_inGoalZ && _inGoalY)) {
     ballVel.x *= -0.6;
@@ -599,6 +599,9 @@ window.addEventListener('keydown', e => {
   keys.add(e.code);
   lastKeyLog = `${e.code} | gs:${gameStarted} | rep:${e.repeat}`;
   e.preventDefault();
+
+  // PK結果画面: 任意キーで再挑戦
+  if (isPK && pkState === 'done' && !e.repeat) { pkRestart(); return; }
 
   // ワンショット動作はkeydownで即トリガー（animate()ループを待たない）
   if (gameStarted && !e.repeat) {
@@ -641,6 +644,15 @@ let groundY     = 0;
 let playerScore = 0;
 let cpuScore    = 0;
 let isGoalScene = false;
+
+// ── PKモード ────────────────────────────────────────────────────────────────
+let isPK        = false;     // PK戦モードか
+let pkState     = 'ready';   // 'ready'(蹴る前) | 'live'(飛行中) | 'resolved' | 'done'
+let pkKick      = 0;         // 実施済みキック数
+let pkGoals     = 0;         // 成功数
+let pkLiveTimer = 0;         // live経過時間（ミス判定用）
+const PK_TOTAL  = 5;         // PK本数
+const PK_DIST   = 11;        // ペナルティスポットのゴールからの距離
 
 // Mixamoのhipボーン位置トラックを除去してモーション間のジャンプを防ぐ
 function stripRootMotion(clip) {
@@ -864,6 +876,14 @@ const scorePlayerEl = document.getElementById('score-player');
 const scoreCpuEl    = document.getElementById('score-cpu');
 const goalFlashEl   = document.getElementById('goal-flash');
 const goalSubText   = document.getElementById('goal-sub-text');
+const pkHudEl       = document.getElementById('pk-hud');
+const pkCountEl     = document.getElementById('pk-count');
+const pkResultEl    = document.getElementById('pk-result');
+if (pkResultEl) {
+  const pkRetry = e => { e.preventDefault(); if (isPK && pkState === 'done') pkRestart(); };
+  pkResultEl.addEventListener('click', pkRetry);
+  pkResultEl.addEventListener('touchstart', pkRetry, { passive: false });
+}
 
 function updateScoreDisplay() {
   if (scorePlayerEl) scorePlayerEl.textContent = playerScore;
@@ -1015,6 +1035,98 @@ function scoreGoal(scorer) {
   }
 }
 
+// ── PKモード ────────────────────────────────────────────────────────────────
+function pkSpotX() { return GOAL_X - PK_DIST; }
+
+// goal-flash を流用して GOAL!/SAVED!/MISS! を表示
+function pkFlash(word, sub, conceded) {
+  if (!goalFlashEl) return;
+  const w = goalFlashEl.querySelector('.goal-word');
+  const s = goalFlashEl.querySelector('.goal-sub');
+  w.textContent = word; goalSubText.textContent = sub;
+  goalFlashEl.classList.toggle('conceded', conceded);
+  w.style.animation = s.style.animation = goalFlashEl.style.animation = 'none';
+  goalFlashEl.style.display = 'flex';
+  requestAnimationFrame(() => { w.style.animation = s.style.animation = goalFlashEl.style.animation = ''; });
+  setTimeout(() => { if (goalFlashEl) goalFlashEl.style.display = 'none'; }, 1400);
+}
+
+function pkRenderHud() {
+  if (pkCountEl) pkCountEl.textContent = `${pkGoals} / ${PK_TOTAL}`;
+}
+
+// プレイヤーをスポットに、ボールを足元に、GKをゴール中央に配置して次のキック準備
+function pkPlaceForKick() {
+  if (!isPK) return;
+  player.position.set(pkSpotX(), groundY, 0);
+  player.rotation.y = -Math.PI / 2;        // 攻撃方向(+x)
+  ballMesh.position.set(pkSpotX(), BALL_R, 0);
+  ballVel.set(0, 0, 0); ballCurveRate = 0;
+  ballOwner = 'player'; isDribbling = true;
+  gkBallHolder = 'none';
+  isKicking = isPassing = isTackling = isSpinning = false;
+  spinTimer = tackleTimer = kickTimer = 0;
+  playerPickupCooldown = 0;
+  eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.catchAnimTimer = 0;
+  if (enemyGKMixer) {
+    const egy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
+    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, egy, 0);
+    charAnim(enemyGKChar, 'idle');
+  }
+  if (mixer) charAnim(playerChar, 'idle');
+  pkState = 'ready';
+  pkLiveTimer = 0;
+}
+
+function pkResolve(result) {
+  if (pkState !== 'live') return;
+  pkState = 'resolved';
+  pkKick++;
+  if (result === 'goal') pkGoals++;
+  gkBallHolder = 'none';     // GKのスローを止める
+  pkRenderHud();
+  if (result === 'goal')      pkFlash('GOAL!',  'PK  成功', false);
+  else if (result === 'save') pkFlash('SAVED!', 'キーパー  セーブ', true);
+  else                        pkFlash('MISS!',  '枠　外', true);
+
+  if (pkKick >= PK_TOTAL) {
+    pkState = 'done';
+    setTimeout(() => pkShowResult(), 1500);
+  } else {
+    setTimeout(() => pkPlaceForKick(), 1800);
+  }
+}
+
+function pkShowResult() {
+  if (!pkResultEl) { pkPlaceForKick(); return; }
+  const rank = pkGoals === PK_TOTAL ? 'PERFECT!' : pkGoals >= PK_TOTAL * 0.6 ? 'NICE!' : 'もう一度!';
+  pkResultEl.querySelector('#pk-result-score').textContent = `${pkGoals} / ${PK_TOTAL}`;
+  pkResultEl.querySelector('#pk-result-rank').textContent  = rank;
+  pkResultEl.style.display = 'flex';
+}
+
+function pkRestart() {
+  if (pkResultEl) pkResultEl.style.display = 'none';
+  pkKick = 0; pkGoals = 0;
+  pkRenderHud();
+  pkPlaceForKick();
+}
+
+function updatePK(dt) {
+  if (!gameStarted) return;
+  if (pkState === 'ready') {
+    // プレイヤーが蹴ったら live へ
+    if (ballOwner !== 'player' && ballVel.lengthSq() > 1) { pkState = 'live'; pkLiveTimer = 0; }
+    return;
+  }
+  if (pkState === 'live') {
+    pkLiveTimer += dt;
+    if (gkBallHolder === 'enemy_gk') { pkResolve('save'); return; }   // GKキャッチ
+    const stopped = ballVel.lengthSq() < 1.0 && ballMesh.position.y <= BALL_R + 0.06;
+    if (pkLiveTimer > 4.0 || (stopped && pkLiveTimer > 0.5)) { pkResolve('miss'); return; }
+  }
+}
+
 const loader = new FBXLoader();
 
 const ANIM_FILES = [
@@ -1103,11 +1215,14 @@ function onCoreLoaded() {
   loadingBar.style.width = pct + '%';
   if (coreReady === CORE_TOTAL) {
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
-    if (playerGKMixer) {
+    // PKモードでは自陣GK（プレイヤー側）は不要なので非表示
+    if (playerGKMixer && !isPK) {
       const pgy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
       playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), pgy, 0);
       playerGKChar.group.visible = true;
       charAnim(playerGKChar, 'idle');
+    } else if (playerGKMixer && isPK) {
+      playerGKChar.group.visible = false;
     }
     if (enemyGKMixer) {
       const egy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
@@ -1152,11 +1267,20 @@ function onCoreLoaded() {
       });
     }
     loadingEl.style.display = 'none';
-    if (scoreDisplay) scoreDisplay.style.display = 'flex';
     gameStarted = true;
     fadeToClip('idle');
     if (hasEnemy) fadeToEnemyClip('idle');
     if (isMultiplayer) fadeToRemoteClip('idle');
+
+    if (isPK) {
+      // PK戦: スコア表示は隠してPK HUDを表示、スポットに配置
+      if (scoreDisplay) scoreDisplay.style.display = 'none';
+      if (pkHudEl) pkHudEl.style.display = 'flex';
+      pkRenderHud();
+      pkPlaceForKick();
+    } else if (scoreDisplay) {
+      scoreDisplay.style.display = 'flex';
+    }
   }
 }
 
@@ -1192,6 +1316,11 @@ export function startGame(config) {
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.patrolPhase = 0;
   playerScore = 0; cpuScore = 0; updateScoreDisplay();
   isGoalScene = false;
+  // PKモード状態リセット
+  isPK = !!config.pk;
+  pkState = 'ready'; pkKick = 0; pkGoals = 0; pkLiveTimer = 0;
+  if (pkResultEl) pkResultEl.style.display = 'none';
+  if (pkHudEl)    pkHudEl.style.display = 'none';
   if (gameWatcher) { gameWatcher(); gameWatcher = null; }
 
   // ── フィールドサイズ設定 ──────────────────────────────────────────
@@ -1209,7 +1338,7 @@ export function startGame(config) {
   fieldRoot = buildField(fs.halfW, fs.halfD);
   scene.add(fieldRoot);
 
-  hasEnemy = !!config.enemyFbx;
+  hasEnemy = isPK ? false : !!config.enemyFbx; // PKは敵CPUなし（GKのみ）
   if (hasEnemy) CORE_TOTAL++;
 
   // マルチプレイヤー設定
@@ -1558,7 +1687,11 @@ function animate() {
   // 相手がボールを手放した → 'enemy' を解放
   if (isMultiplayer && ballOwner === 'enemy' && !remoteOwns) ballOwner = 'none';
 
-  if (!isMultiplayer) {
+  if (isPK) {
+    // PK戦: 敵GKのみ守備、updatePKで進行管理（敵CPU・自陣GKは動かさない）
+    updateGK(enemyGKChar, eGKSt, GOAL_X, enemyChar, 'enemy_gk', dt);
+    updatePK(dt);
+  } else if (!isMultiplayer) {
     updateEnemy(dt);
     updateGK(playerGKChar, pGKSt, -GOAL_X, playerChar, 'player_gk', dt);
     if (hasEnemy) updateGK(enemyGKChar, eGKSt, GOAL_X, enemyChar, 'enemy_gk', dt);

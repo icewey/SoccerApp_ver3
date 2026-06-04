@@ -437,6 +437,28 @@
     #lb-kickoff:hover::before { left: 160%; }
     #lb-kickoff:active { transform: translateY(0); }
 
+    /* ── ボタン行 + PK戦ボタン ── */
+    .lb-btn-row { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; }
+    #lb-pk {
+      background: transparent;
+      border: 2px solid #ffd24a;
+      color: #ffd24a;
+      padding: 15px 30px;
+      font-size: 1.0rem;
+      font-weight: 700;
+      letter-spacing: 5px;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.28s;
+      font-family: inherit;
+    }
+    #lb-pk:hover {
+      background: rgba(255,210,74,0.08);
+      box-shadow: 0 0 28px rgba(255,210,74,0.3);
+      transform: translateY(-2px);
+    }
+    #lb-pk:active { transform: translateY(0); }
+
     /* ── keyboard hint ── */
     .lb-hint {
       position: absolute;
@@ -447,6 +469,48 @@
     }
 
     /* ── スコア表示（1行レイアウト: YOU 0 – 0 CPU） ── */
+    /* ══ PK HUD ══ */
+    #pk-hud {
+      position: fixed;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 90;
+      display: none;
+      flex-direction: row;
+      align-items: center;
+      gap: 14px;
+      background: rgba(0,0,0,0.62);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 10px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 8px 22px;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    .pk-hud-label {
+      font-size: 0.7rem; letter-spacing: 4px; font-weight: 800;
+      color: #ffd24a; text-transform: uppercase;
+    }
+    .pk-hud-count {
+      font-size: 1.7rem; font-weight: 900; color: #fff;
+      font-variant-numeric: tabular-nums; line-height: 1;
+      text-shadow: 0 0 18px rgba(255,255,255,0.35);
+    }
+    /* ══ PK 結果 ══ */
+    #pk-result {
+      position: fixed; inset: 0; z-index: 120;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.78);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      cursor: pointer;
+    }
+    #pk-result-inner { text-align: center; color: #fff; }
+    #pk-result-rank  { font-size: 2.2rem; font-weight: 900; letter-spacing: 4px; color: #ffd24a; margin-bottom: 8px; }
+    #pk-result-score { font-size: 5rem; font-weight: 900; line-height: 1; text-shadow: 0 0 30px rgba(255,210,74,0.5); }
+    #pk-result-hint  { margin-top: 22px; font-size: 0.85rem; letter-spacing: 2px; color: rgba(255,255,255,0.6); }
+
     #score-display {
       position: fixed;
       top: 14px;
@@ -664,7 +728,10 @@
             <button class="lb-tm-btn"        id="fs-compact">5v5</button>
           </div>
         </div>
-        <button id="lb-kickoff">KICK OFF</button>
+        <div class="lb-btn-row">
+          <button id="lb-kickoff">KICK OFF</button>
+          <button id="lb-pk">PK戦</button>
+        </div>
         <span class="lb-hint">← → で選択　　Enter でスタート</span>
       </div>
 
@@ -717,6 +784,21 @@
   <div id="goal-flash">
     <div class="goal-word">GOAL!</div>
     <div class="goal-sub" id="goal-sub-text"></div>
+  </div>
+
+  <!-- ══ PK HUD ══════════════════════════════════════════════════════ -->
+  <div id="pk-hud">
+    <span class="pk-hud-label">PK戦</span>
+    <span class="pk-hud-count" id="pk-count">0 / 5</span>
+  </div>
+
+  <!-- ══ PK 結果 ═════════════════════════════════════════════════════ -->
+  <div id="pk-result">
+    <div id="pk-result-inner">
+      <div id="pk-result-rank">NICE!</div>
+      <div id="pk-result-score">0 / 5</div>
+      <div id="pk-result-hint">タップ / 任意キー でもう一度</div>
+    </div>
   </div>
 
   <!-- ══ LOADING ════════════════════════════════════════════════════ -->

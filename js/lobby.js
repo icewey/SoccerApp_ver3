@@ -176,6 +176,14 @@ function requestFullscreen() {
   fn?.call(el);
 }
 
+function closeLobbyAndLoad() {
+  const lobby = document.getElementById('lobby');
+  lobby.style.opacity = '0';
+  lobby.style.pointerEvents = 'none';
+  setTimeout(() => { lobby.style.display = 'none'; }, 380);
+  document.getElementById('loading').style.display = 'flex';
+}
+
 function kickOff() {
   const char = CHARACTERS[selectedIdx];
   if (!char.available) return;
@@ -188,15 +196,17 @@ function kickOff() {
     ? enemyCandidates[Math.floor(Math.random() * enemyCandidates.length)]
     : null;
 
-  const lobby = document.getElementById('lobby');
-  lobby.style.opacity = '0';
-  lobby.style.pointerEvents = 'none';
-  setTimeout(() => { lobby.style.display = 'none'; }, 380);
-
-  const loadingEl = document.getElementById('loading');
-  loadingEl.style.display = 'flex';
-
+  closeLobbyAndLoad();
   startGame({ charFbx: char.fbx, fieldSize, enemyFbx: enemyChar?.fbx ?? null });
+}
+
+// PK戦: プレイヤー vs CPUキーパー
+function startPK() {
+  const char = CHARACTERS[selectedIdx];
+  if (!char.available) return;
+  requestFullscreen();
+  closeLobbyAndLoad();
+  startGame({ charFbx: char.fbx, fieldSize: 'full', enemyFbx: null, pk: true });
 }
 
 function init() {
@@ -212,6 +222,7 @@ function init() {
   });
 
   document.getElementById('lb-kickoff').addEventListener('click', kickOff);
+  document.getElementById('lb-pk').addEventListener('click', startPK);
 
   // ── モード切替 ───────────────────────────────────────────────────
   function setMode(real) {
