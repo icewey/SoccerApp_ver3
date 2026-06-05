@@ -222,10 +222,18 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
     // カーブキック: 蹴り出しを foot 側へ振り、空中で逆へ曲げるバナナ軌道。
     // curve=+1(右利き): 右へ蹴り出し → 左へ曲がる。-1(左利き)で左右反転。
     const kickAngle = player.rotation.y - curve * (Math.PI / 8);
-    ballVel.x = -Math.sin(kickAngle) * 13 * pwr;
-    ballVel.z = -Math.cos(kickAngle) * 13 * pwr;
-    ballVel.y = 11 + 4 * pwr;       // チャージで浮きと飛距離アップ
-    ballCurveRate = curve * (0.7 + 0.45 * pwr);
+    // 最高点をゴール高(2.44m)+約0.5mに抑える固定の打ち出し上方向。
+    // peak ≈ vy²/(2g) = 11.1²/44 ≈ 2.8m（+接地高で約2.9m）。
+    const CURVE_VY  = 11.1;
+    // 滞空時間が短くなる分だけ水平速度を上げ、飛距離は従来(vy=11+4*pwr)と同等に維持。
+    const prevVy    = 11 + 4 * pwr;
+    const timeComp  = prevVy / CURVE_VY; // 旧/新の滞空時間比
+    const hSpd      = 13 * pwr * timeComp;
+    ballVel.x = -Math.sin(kickAngle) * hSpd;
+    ballVel.z = -Math.cos(kickAngle) * hSpd;
+    ballVel.y = CURVE_VY;
+    // 横の曲がり総量も滞空時間比で補正し、低い弾道でも同程度に曲げる。
+    ballCurveRate = curve * (0.7 + 0.45 * pwr) * timeComp;
   } else {
     const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
     ballVel.copy(facing).multiplyScalar((lofted ? 14 : 15) * pwr);
