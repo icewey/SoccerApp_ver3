@@ -330,6 +330,77 @@ function startTackle() {
   fadeToClip('tackle', false);
 }
 
+// ── 固有スキル ────────────────────────────────────────────────────────────
+// キャラID → スキル種別。未登録は 'spin'（全員デフォルトでスピン）。
+const SKILL_BY_CHAR = {
+  nagi: 'fake_volley', // 凪: 2段式フェイクボレー（FBX連結＋特殊ボール挙動）
+};
+let playerSkill  = 'spin';
+let skillSession = 0; // スキル中の stale setTimeout を無効化するカウンタ
+
+// スキルボタン/キーの共通エントリ。所持スキルに応じて分岐。
+function useSkill() {
+  if (!gameStarted || isGoalScene || playerStunTimer > 0) return;
+  if (isKicking || isPassing || isTackling) return;
+  if (playerSkill === 'fake_volley') nagiFakeVolley();
+  else startSpin(); // デフォルト: スピン（ドリブル中のみ・内部でガード）
+}
+
+// 凪の2段式フェイクボレー:
+//  1) fakeKick_01 の接触でボールを真上へポップ
+//  2) fakeKick_02 の接触（落下してきたタイミング）で前方へ強烈に発射
+const FAKE_BLEND     = 0.12; // 連結時の繋ぎ目（buildComboClipと合わせる）
+const FAKE_POP_FRAC  = 0.5;  // motion1 のどこでボールを上げるか（0..1）
+const FAKE_HIT_FRAC  = 0.5;  // motion2 のどこで蹴り当てるか（0..1）
+const FAKE_CONTACT_H = 0.95; // 蹴り当てる高さ(m)
+const FAKE_POWER     = 32;   // 発射の水平初速（強烈）
+function nagiFakeVolley() {
+  if (ballOwner !== 'player') return;
+  const c1 = clips['fake01'], c2 = clips['fake02'];
+  if (!c1 || !c2 || !mixer) { startKick(false, 0, 1.6); return; } // 素材が無ければ通常シュート
+  if (!clips['fake_volley']) buildComboClip('fake_volley', ['fake01', 'fake02'], FAKE_BLEND);
+  const combo = clips['fake_volley'];
+  if (!combo) { startKick(false, 0, 1.6); return; }
+
+  endSpin();
+  isKicking = true;                         // 全モーションをロックして最後まで再生
+  kickTimer = combo.duration + 0.1;
+  fadeToClip('fake_volley', false);
+
+  // タイミング（連結クリップ内の絶対時刻）
+  const tPop     = c1.duration * FAKE_POP_FRAC;
+  const tContact = c1.duration + FAKE_BLEND + c2.duration * FAKE_HIT_FRAC;
+  const dtAir    = Math.max(0.2, tContact - tPop);
+  const h0       = ballMesh.position.y;
+  // 落下してちょうど接触高さに来るポップ初速: h(dt)=h0+vy*dt-0.5g dt^2 = CONTACT_H
+  const vyPop    = (FAKE_CONTACT_H - h0 + 0.5 * BALL_GRAVITY * dtAir * dtAir) / dtAir;
+
+  // スキル中はボールを拾い直されないようロック
+  playerPickupCooldown = tContact + 0.3;
+  enemyPickupCooldown  = tContact + 0.3;
+
+  const sid = ++skillSession;
+  const facing = () => new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+
+  // ① ボールを真上へポップ
+  setTimeout(() => {
+    if (sid !== skillSession || !gameStarted || isGoalScene) return;
+    const fwd = facing();
+    isDribbling = false; ballOwner = 'none';
+    ballCurveRate = 0; ballSpin.set(0, 0, 0);
+    ballMesh.position.set(player.position.x + fwd.x * 0.5, h0, player.position.z + fwd.z * 0.5);
+    ballVel.set(0, vyPop, 0); // 真上
+  }, tPop * 1000);
+
+  // ② 落ちてきたボールを前方へ強烈に蹴り出す
+  setTimeout(() => {
+    if (sid !== skillSession || !gameStarted || isGoalScene) return;
+    const fwd = facing();
+    ballOwner = 'none'; ballCurveRate = 0; ballSpin.set(0, 0, 0);
+    ballVel.set(fwd.x * FAKE_POWER, 7, fwd.z * FAKE_POWER);
+  }, tContact * 1000);
+}
+
 // ── 敵シュート（charShoot を使用）────────────────────────────────────────
 function enemyShoot() {
   charShoot(
@@ -698,7 +769,7 @@ window.addEventListener('keydown', e => {
       startTackle(); // タックル（ボール非所持時のみ・内部でガード）
     }
     if (e.code === 'KeyZ') {
-      startSpin(); // スピン（ドリブル中のみ・内部でガード）
+      useSkill(); // 固有スキル（デフォルト=スピン、凪=フェイクボレー）
     }
   }
 }, { capture: true }); // captureでブラウザより先にキーを受け取る
@@ -1121,6 +1192,7 @@ function mpResetAfterGoal() {
   isDribbling = isKicking = isPassing = isTackling = isSpinning = false;
   spinTimer = tackleTimer = kickTimer = 0;
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
+  skillSession++; // 保留中スキルtimeoutを無効化
   clearStunMarks();
   playerPickupCooldown = 0;
   if (mixer)           { mixer.stopAllAction(); current = null; }
@@ -1140,6 +1212,7 @@ function resetAfterGoal(scorer) {
   isKicking = isPassing = isTackling = isSpinning = false;
   spinTimer = tackleTimer = kickTimer = 0;
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
+  skillSession++; // 保留中スキルtimeoutを無効化
   clearStunMarks();
   playerPickupCooldown = 0;
 
@@ -1250,6 +1323,7 @@ function pkPlaceForKick() {
   isKicking = isPassing = isTackling = isSpinning = false;
   spinTimer = tackleTimer = kickTimer = 0;
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
+  skillSession++; // 保留中スキルtimeoutを無効化
   clearStunMarks();
   playerPickupCooldown = 0;
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.catchAnimTimer = 0;
@@ -1327,6 +1401,9 @@ const ANIM_FILES = [
   ['gk_catch',   './animations/Goalkeeper Catch.fbx'],
   ['gk_dive',    './animations/Goalkeeper Diving Save.fbx'],
   ['gk_throw',   './animations/Goalkeeper Overhand Throw.fbx'],
+  // 凪の固有スキル「2段式フェイクボレー」用（連結して使う）
+  ['fake01', './animations/2段式フェイクボレー/fakeKick_01.fbx'],
+  ['fake02', './animations/2段式フェイクボレー/fakeKick_02.fbx'],
 ];
 let CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ（敵追加時はstartGame内で+1）
 let coreReady = 0;
@@ -1473,6 +1550,9 @@ function onCoreLoaded() {
 export function startGame(config) {
   // 利き足: 左利きキャラ作成時は config.leftFooted=true でカーブの左右を反転
   playerFootSign = config.leftFooted ? -1 : 1;
+  // 固有スキル: キャラIDから決定（未登録は spin）
+  playerSkill = SKILL_BY_CHAR[config.charId] || 'spin';
+  skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
   cancelCharge();
   // ── 前ゲームの残骸を全てクリア ────────────────────────────────────
   // player の旧キャラ削除
@@ -2287,12 +2367,12 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     }, { passive: false });
   }
 
-  // スピンボタン（ドリブル中のみ有効）
-  const spinBtn = document.getElementById('btn-spin');
-  if (spinBtn) {
-    spinBtn.addEventListener('touchstart', e => {
+  // スキルボタン（ボール所持/ドリブル中に有効。キャラ固有スキルを発動）
+  const skillBtn = document.getElementById('btn-skill');
+  if (skillBtn) {
+    skillBtn.addEventListener('touchstart', e => {
       e.preventDefault();
-      startSpin();
+      useSkill();
     }, { passive: false });
   }
 
@@ -2304,7 +2384,7 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
       if (el) el.style.display = hasBall ? '' : 'none';
     });
     if (tackleBtn) tackleBtn.style.display = hasBall ? 'none' : '';
-    if (spinBtn)   spinBtn.style.display   = hasBall ? '' : 'none';
+    if (skillBtn)  skillBtn.style.display  = hasBall ? '' : 'none';
   }
   // animate() から呼べるようにグローバル化
   window._updateMobileButtons = updateMobileButtons;

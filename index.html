@@ -98,16 +98,16 @@
     .touch-btn:active { background: rgba(255,255,255,0.38); }
 
     /* 右：アクションボタン（全て右半分に配置） */
-    #btn-spin        { width:60px;height:60px; bottom:240px; right:10px;  background:rgba(255,220,0,0.35); }
+    #btn-skill       { width:60px;height:60px; bottom:240px; right:10px;  background:rgba(255,220,0,0.35); }
     #btn-straight    { width:72px;height:72px; bottom:160px; right:90px;  background:rgba(255,80,80,0.32); }
     #btn-curve       { width:72px;height:72px; bottom:160px; right:10px;  background:rgba(80,200,255,0.32); }
     #btn-tackle      { width:72px;height:72px; bottom:78px;  right:50px;  background:rgba(255,60,60,0.45); }
-    #btn-straight, #btn-curve, #btn-tackle, #btn-spin { font-size:0.72rem; text-align:center; line-height:1.1; }
+    #btn-straight, #btn-curve, #btn-tackle, #btn-skill { font-size:0.72rem; text-align:center; line-height:1.1; }
 
     /* ── 横持ち: ボタンをコンパクトに再配置 ── */
     @media (orientation: landscape) and (pointer: coarse) {
       #touch-controls  { height: 190px; }
-      #btn-spin        { width:50px;height:50px; bottom:128px; right:10px; }
+      #btn-skill       { width:50px;height:50px; bottom:128px; right:10px; }
       #btn-straight    { width:60px;height:60px; bottom:66px;  right:88px; }
       #btn-curve       { width:60px;height:60px; bottom:66px;  right:14px; }
       #btn-tackle      { width:58px;height:58px; bottom:66px;  right:160px; }
@@ -840,7 +840,7 @@
     <span>F : ストレート（長押しでチャージ→離して発射）</span>
     <span>H : カーブ（長押しでチャージ→離して発射）</span>
     <span>T : タックル（ボールなし時）</span>
-    <span>Z : スピン（ドリブル時）</span>
+    <span>Z : スキル（キャラ固有 / 既定はスピン）</span>
   </div>
 
   <div id="info">Soccer App ver3</div>
@@ -850,7 +850,7 @@
 
   <!-- タッチ操作ボタン（右側のみ） -->
   <div id="touch-controls">
-    <div class="touch-btn" id="btn-spin">スピン</div>
+    <div class="touch-btn" id="btn-skill">スキル</div>
     <div class="touch-btn" id="btn-straight">ストレート</div>
     <div class="touch-btn" id="btn-curve">カーブ</div>
     <div class="touch-btn" id="btn-tackle">タックル</div>

@@ -155,6 +155,7 @@ function launchMultiplayer(role, code, hostInfo, guestInfo) {
 
   startGame({
     charFbx:   myChar.fbx,
+    charId:    myChar.id,
     fieldSize: fs,
     enemyFbx:  null,
     mp: {
@@ -197,7 +198,7 @@ function kickOff() {
     : null;
 
   closeLobbyAndLoad();
-  startGame({ charFbx: char.fbx, fieldSize, enemyFbx: enemyChar?.fbx ?? null });
+  startGame({ charFbx: char.fbx, charId: char.id, fieldSize, enemyFbx: enemyChar?.fbx ?? null });
 }
 
 // PK戦: プレイヤー vs CPUキーパー
@@ -206,7 +207,7 @@ function startPK() {
   if (!char.available) return;
   requestFullscreen();
   closeLobbyAndLoad();
-  startGame({ charFbx: char.fbx, fieldSize: 'full', enemyFbx: null, pk: true });
+  startGame({ charFbx: char.fbx, charId: char.id, fieldSize: 'full', enemyFbx: null, pk: true });
 }
 
 function init() {
