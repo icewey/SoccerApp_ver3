@@ -492,7 +492,7 @@ const SHIDOU_POWER        = 34;   // 水平初速（強烈）
 const SHIDOU_ANGLE_DEG    = 30;   // 地面との入射角（下向き）
 const SHIDOU_JUMP_H       = 3.0;  // プレイヤーのジャンプ頂点(m)
 const SHIDOU_BELLY_OFFSET = 1.0;  // 足元からの腹の高さ(m)＝保持位置
-const SHIDOU_HIT_FRAC     = 0.35; // motion2 のどこで蹴り当てるか（0=切替直後／大きいほど遅い）
+const SHIDOU_HIT_FRAC     = 0.85; // motion2 のどこで蹴り当てるか（終わりぎわ／大きいほど遅い）
 // スキル中の状態（着地で体の向きを戻す / 切替で1回だけ蹴り落とす）
 let shidouJumpTimer = 0, shidouJumpTotal = 0, shidouJumpPeak = 0;
 let shidouShotAngle = 0, shidouContactT = 0, shidouSmashed = false;
