@@ -232,9 +232,9 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
     ballVel.x = -Math.sin(kickAngle) * hSpd;
     ballVel.z = -Math.cos(kickAngle) * hSpd;
     ballVel.y = CURVE_VY;
-    // 曲がりは一定レート（滞空≈1秒なので総bend≈0.8rad≒46°）。
+    // 曲がりは一定レート（滞空≈1秒なので総bend≈1.1rad≒63°）。
     // パワーで増幅するとブーメランになるため power 非依存にする。
-    ballCurveRate = curve * 0.8;
+    ballCurveRate = curve * 1.1;
   } else {
     const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
     ballVel.copy(facing).multiplyScalar((lofted ? 14 : 15) * pwr);
