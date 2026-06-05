@@ -232,8 +232,9 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
     ballVel.x = -Math.sin(kickAngle) * hSpd;
     ballVel.z = -Math.cos(kickAngle) * hSpd;
     ballVel.y = CURVE_VY;
-    // 横の曲がり総量も滞空時間比で補正し、低い弾道でも同程度に曲げる。
-    ballCurveRate = curve * (0.7 + 0.45 * pwr) * timeComp;
+    // 曲がりは控えめな一定レート（滞空≈1秒なので総bend≈0.5rad≒29°）。
+    // パワーで増幅するとブーメランになるため power 非依存にする。
+    ballCurveRate = curve * 0.5;
   } else {
     const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
     ballVel.copy(facing).multiplyScalar((lofted ? 14 : 15) * pwr);
@@ -1769,7 +1770,7 @@ function clearStunMarks() {
 }
 
 // 奪われた側にスタン＋‼️を付与。who: 'player' | 'enemy'
-const STUN_TIME = 0.6; // ほんの少しフリーズ
+const STUN_TIME = 1.2; // 奪われた側のフリーズ時間
 function applyStealStun(who) {
   if (who === 'enemy' && hasEnemy) {
     enemyStunTimer = STUN_TIME;
