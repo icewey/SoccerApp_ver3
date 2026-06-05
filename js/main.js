@@ -2953,7 +2953,8 @@ function animate() {
       if (!keys.has('KeyQ') && !keys.has('KeyE') && !lookSwipe.active) {
         const isMoving = moveVec.lengthSq() > 0.001;
         let targetAng = player.rotation.y;
-        if (mode2v2 && !isMoving) {
+        // GK保持中はデフォルト視点を作動させず従来どおり進行方向追従。投げたら切替。
+        if (mode2v2 && !isMoving && gkBallHolder === 'none') {
           const offense = (ballOwner === 'player' || ballOwner === 'ally');
           targetAng = offense ? -Math.PI / 2 : Math.PI / 2;
         }
