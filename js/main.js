@@ -2524,7 +2524,7 @@ function isClosestDefender2(c) {
 }
 
 // ── パス実行（出し手→味方へのダイレクトパス。軌道上に敵がいればカット）──────
-const PASS_LIFT = 3.2;
+const PASS_DIRECT_SPEED = 30; // 物理無視で対象へ直進する速度(m/s)
 function doPass(passerKey) {
   const passer = entity2(passerKey), recv = teammate2(passerKey);
   if (!passer || !recv) return;
@@ -2543,10 +2543,10 @@ function doPass(passerKey) {
     const perp = Math.abs(rx * uz - rz * ux);
     if (perp < PASS_INTERCEPT_R && t < bestT) { bestT = t; cutter = o; }
   }
-  const speed = Math.max(13, Math.min(26, dist * 3.0));
   ballOwner = 'none'; isDribbling = false; ballCurveRate = 0;
-  ballMesh.position.y = Math.max(ballMesh.position.y, BALL_R);
-  ballVel.set(ux * speed, PASS_LIFT, uz * speed);
+  ballMesh.position.y = BALL_R + 0.25;
+  // 物理無視で直進。ballVel は軌道トレイル表示用に向き×速度を入れておく。
+  ballVel.set(ux * PASS_DIRECT_SPEED, 0, uz * PASS_DIRECT_SPEED);
   passState = { passerKey, receiverKey: recv.key, cutterKey: cutter ? cutter.key : null, timer: 0 };
 }
 function cpu2Pass(c) {
@@ -2590,29 +2590,41 @@ function shouldCpu2Pass(c, mate) {
   return pressured || mateAdv > 6;
 }
 
-// ── パス飛行中の処理（受け手 or カッター到達で所有権確定）────────────────────
+// ── パス飛行中の処理（物理無視で対象へ直進。受け手 or カッター到達で所有権確定）──
 function update2v2PassFlight(dt) {
   passState.timer += dt;
-  ballLoosePhysics(dt);
-  if (isGoalScene) { passState = null; return; }
   const targetKey = passState.cutterKey || passState.receiverKey;
   const tgt = entity2(targetKey);
-  const d = tgt ? distXZ(ballMesh.position, tgt.group.position) : 999;
-  if (d < DRIBBLE_DIST * 1.3) {
+  if (!tgt) { passState = null; return; }
+  const tp = tgt.group.position;
+  const dx = tp.x - ballMesh.position.x, dz = tp.z - ballMesh.position.z;
+  const dist = Math.hypot(dx, dz);
+  const step = PASS_DIRECT_SPEED * dt;
+
+  // 到達: 所有権確定（カットなら出し手＋受け手をフリーズ）
+  if (dist <= Math.max(step, DRIBBLE_DIST * 0.8) || passState.timer > 3.0) {
+    ballMesh.position.set(tp.x, BALL_R, tp.z);
+    ballVel.set(0, 0, 0); ballCurveRate = 0;
     if (passState.cutterKey) {
       ballOwner = passState.cutterKey;
       const cut = entity2(passState.cutterKey);
       if (cut && cut.pickupCd !== undefined) cut.pickupCd = 0.25;
-      // パスカット成立: 出し手と受け手が‼️でフリーズ
-      freezeEntity2(passState.passerKey,   STUN_TIME);
+      freezeEntity2(passState.passerKey,   STUN_TIME); // パスカット成立 → ‼️フリーズ
       freezeEntity2(passState.receiverKey, STUN_TIME);
     } else {
       ballOwner = passState.receiverKey;
     }
     passState = null;
-  } else if (passState.timer > 2.4 || ballVel.length() < 1.2) {
-    passState = null; // 届かず＝ルーズボール
+    return;
   }
+
+  // 物理無視で対象へ直進（重力・バウンドなし、低い一定高さ）
+  const ux = dx / dist, uz = dz / dist;
+  ballMesh.position.x += ux * step;
+  ballMesh.position.z += uz * step;
+  ballMesh.position.y = BALL_R + 0.25;
+  ballMesh.rotateOnWorldAxis(new THREE.Vector3(uz, 0, -ux), step / BALL_R); // 転がり演出
+  ballVel.set(ux * PASS_DIRECT_SPEED, 0, uz * PASS_DIRECT_SPEED);            // トレイル速度用
 }
 
 // ── 2vs2 メイン更新（所有権・CPU AI・ドリブル配置・ルーズ物理を一括処理）─────
