@@ -482,20 +482,19 @@ function nagiFakeVolley() {
   }, tContact * 1000);
 }
 
-// 士道: オーバーヘッド・スマッシュシュート（黄＆ピンクの残像）
+// 士道: オーバーヘッド・スマッシュシュート（士道本体＆ボール軌道に黄＆ピンクの残像）
 //  - 発動時に体だけ180°反転（オーバーヘッドの見た目）。シュートは元の0°方向へ打つ。
-//  1) overhead01 で約3m飛び上がりつつボールを頭上(約2.6m)へ上げる
-//  2) overhead02 でボールを前方斜め下へ強烈に叩き込む（地面との入射角≈30°）。
-//     地面でバウンドしてゴールへ伸びるスマッシュ。着地で体の向きを元へ戻す。
-const SHIDOU_BLEND     = 0.1;
-const SHIDOU_POP_FRAC  = 0.5;   // motion1 のどこでボールを上げるか
-const SHIDOU_HIT_FRAC  = 0.2;   // motion2 のどこで叩き込むか
-const SHIDOU_CONTACT_H = 2.6;   // 叩き込む高さ(m)＝ジャンプ頂点付近
-const SHIDOU_POWER     = 34;    // 水平初速（強烈）
-const SHIDOU_ANGLE_DEG = 30;    // 地面との入射角（下向き）
-const SHIDOU_JUMP_H    = 3.0;   // プレイヤーのジャンプ頂点(m)
-// スキル中のジャンプ状態（着地時に体の向きを戻す）
-let shidouJumpTimer = 0, shidouJumpTotal = 0, shidouJumpPeak = 0, shidouShotAngle = 0;
+//  1) overhead01 中: 約3m飛び上がりつつ、ボールは士道の腹あたりに保持（ジャンプと共に上昇）。
+//  2) 01→02 の切替（=ジャンプ頂点）でボールが最高点 → そのまま前方斜め下30°へ蹴り落とす。
+//     着地で体の向きを元へ戻す。
+const SHIDOU_BLEND        = 0.1;
+const SHIDOU_POWER        = 34;   // 水平初速（強烈）
+const SHIDOU_ANGLE_DEG    = 30;   // 地面との入射角（下向き）
+const SHIDOU_JUMP_H       = 3.0;  // プレイヤーのジャンプ頂点(m)
+const SHIDOU_BELLY_OFFSET = 1.0;  // 足元からの腹の高さ(m)＝保持位置
+// スキル中の状態（着地で体の向きを戻す / 切替で1回だけ蹴り落とす）
+let shidouJumpTimer = 0, shidouJumpTotal = 0, shidouJumpPeak = 0;
+let shidouShotAngle = 0, shidouContactT = 0, shidouSmashed = false;
 
 function shidouSmash() {
   if (ballOwner !== 'player') return;
@@ -515,54 +514,26 @@ function shidouSmash() {
 
   fadeToClip('shidou_smash', false);
 
-  const tPop     = c1.duration * SHIDOU_POP_FRAC;
-  const tContact = c1.duration + SHIDOU_BLEND + c2.duration * SHIDOU_HIT_FRAC;
-  const dtAir    = Math.max(0.2, tContact - tPop);
-  const h0       = ballMesh.position.y;
-  // 接触時にちょうど CONTACT_H へ来るポップ初速
-  const vyPop    = (SHIDOU_CONTACT_H - h0 + 0.5 * BALL_GRAVITY * dtAir * dtAir) / dtAir;
-
-  // 約3m飛び上がるジャンプ（頂点を接触タイミングに合わせる）
+  // 01→02 の境界＝頂点＝蹴り落としタイミング
+  shidouContactT  = c1.duration + SHIDOU_BLEND;
   shidouJumpTotal = combo.duration;
-  shidouJumpPeak  = tContact;
+  shidouJumpPeak  = shidouContactT;
   shidouJumpTimer = shidouJumpTotal;
+  shidouSmashed   = false;
 
-  playerPickupCooldown = tContact + 0.3;
-  enemyPickupCooldown  = tContact + 0.3;
-
-  const sid = ++skillSession;
-  // 打ち出し/配置は反転前の元方向（0°）を使う
-  const fwd = () => new THREE.Vector3(-Math.sin(shidouShotAngle), 0, -Math.cos(shidouShotAngle));
-
-  // ① ボールを頭上へ上げる
-  setTimeout(() => {
-    if (sid !== skillSession || !gameStarted || isGoalScene) return;
-    const f = fwd();
-    isDribbling = false; ballOwner = 'none';
-    ballCurveRate = 0; ballSpin.set(0, 0, 0);
-    ballMesh.position.set(player.position.x + f.x * 0.3, h0, player.position.z + f.z * 0.3);
-    ballVel.set(0, vyPop, 0);
-  }, tPop * 1000);
-
-  // ② 前方斜め下へ叩き込む（入射角≈30°下向き）。黄＆ピンクの残像。
-  setTimeout(() => {
-    if (sid !== skillSession || !gameStarted || isGoalScene) return;
-    const f  = fwd();
-    const vh = SHIDOU_POWER;
-    const vy = -vh * Math.tan(SHIDOU_ANGLE_DEG * Math.PI / 180); // 水平から30°下
-    ballOwner = 'none'; ballCurveRate = 0; ballSpin.set(0, 0, 0);
-    ballMesh.position.set(player.position.x + f.x * 0.5, SHIDOU_CONTACT_H, player.position.z + f.z * 0.5);
-    ballVel.set(f.x * vh, vy, f.z * vh);
-    setBallTrail([0xffd400, 0xff3399], THREE.AdditiveBlending); // 黄＆ピンクの軌道
-  }, tContact * 1000);
+  // スキル中はボールを拾い直されないようロック。ボールは updateShidouSkill が駆動。
+  playerPickupCooldown = combo.duration + 0.2;
+  enemyPickupCooldown  = combo.duration + 0.2;
+  ballOwner = 'none'; isDribbling = false;
 }
 
-// 士道スキルのジャンプ。頂点(shidouJumpPeak)を接触に合わせた山なりでY位置を駆動。
-// 着地（タイマー満了）で体の向きを元(0°)へ戻す。
-function updateShidouJump(dt) {
+// 士道スキルの毎フレーム駆動。ジャンプY＋ボール保持（腹）＋頂点での蹴り落とし。
+function updateShidouSkill(dt) {
   if (shidouJumpTimer <= 0) return;
   shidouJumpTimer -= dt;
   const e = shidouJumpTotal - shidouJumpTimer; // 経過時間
+
+  // ジャンプY（頂点を shidouJumpPeak=切替 に合わせた山なり）
   let h;
   if (e <= shidouJumpPeak) {
     const r = shidouJumpPeak > 0 ? e / shidouJumpPeak : 1;
@@ -572,11 +543,36 @@ function updateShidouJump(dt) {
     const r = (e - shidouJumpPeak) / denom;
     h = SHIDOU_JUMP_H * (1 - r * r);             // 頂点→0（下降）
   }
-  if (shidouJumpTimer <= 0) {
-    h = 0;
-    player.rotation.y = shidouShotAngle; // 着地で体の向きを元へ戻す
-  }
+  const landed = shidouJumpTimer <= 0;
+  if (landed) { h = 0; player.rotation.y = shidouShotAngle; } // 着地で向きを元へ
   player.position.y = groundY + Math.max(0, h);
+
+  const fwd = new THREE.Vector3(-Math.sin(shidouShotAngle), 0, -Math.cos(shidouShotAngle));
+
+  if (e < shidouContactT) {
+    // 01中: ボールを士道の腹あたりに保持（ジャンプに合わせて上昇＝切替時に頂点）
+    ballOwner = 'none'; isDribbling = false; ballCurveRate = 0; ballSpin.set(0, 0, 0);
+    ballMesh.position.set(
+      player.position.x + fwd.x * 0.35,
+      player.position.y + SHIDOU_BELLY_OFFSET,
+      player.position.z + fwd.z * 0.35
+    );
+    ballVel.set(0, 0, 0);
+  } else if (!shidouSmashed) {
+    // 02切替: 頂点から前方斜め下30°へ蹴り落とす（黄＆ピンクの軌道）
+    shidouSmashed = true;
+    const vh = SHIDOU_POWER;
+    const vy = -vh * Math.tan(SHIDOU_ANGLE_DEG * Math.PI / 180);
+    ballOwner = 'none'; ballCurveRate = 0; ballSpin.set(0, 0, 0);
+    ballMesh.position.set(
+      player.position.x + fwd.x * 0.4,
+      player.position.y + SHIDOU_BELLY_OFFSET,
+      player.position.z + fwd.z * 0.4
+    );
+    ballVel.set(fwd.x * vh, vy, fwd.z * vh);
+    setBallTrail([0xffd400, 0xff3399], THREE.AdditiveBlending);
+  }
+  // 蹴った後はボール自由飛行（updateBall/ルーズ物理が処理）
 }
 
 // 馬狼: ほんの少し曲がる強烈カーブシュート（赤黒の残像）
@@ -2514,6 +2510,8 @@ function updateCharFx(dt) {
       if (playerSkill === 'reo_copy')    spawnAuraParticle(player, 0x9b30ff, THREE.NormalBlending); // 玲王: 常時紫
       if (chigiriBoostTimer > 0)          spawnAuraParticle(player, 0xff3399, THREE.NormalBlending);
       if (bachiraSkillTimer > 0)          spawnAuraParticle(player, 0xffd400, THREE.NormalBlending);
+      // 士道スキル中: 黄＆ピンクのオーラを交互に（加算で発光）
+      if (shidouJumpTimer > 0)            spawnAuraParticle(player, Math.random() < 0.5 ? 0xffd400 : 0xff3399, THREE.AdditiveBlending);
     }
     if (chigiriBoostTimer > 0) {
       _ghostTimer += dt;
@@ -2522,6 +2520,10 @@ function updateCharFx(dt) {
       // 残像は motion2（急加速）からのみ。motion1（その場フェイント）では出さない。
       _ghostTimer += dt;
       if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xffd400); }
+    } else if (shidouJumpTimer > 0) {
+      // 士道: スキル中ずっと黄＆ピンクの残像を交互に（ジャンプに追従）
+      _ghostTimer += dt;
+      if (_ghostTimer >= 0.04) { _ghostTimer = 0; spawnCharGhost(Math.random() < 0.5 ? 0xffd400 : 0xff3399); }
     }
   }
 
@@ -3015,7 +3017,7 @@ function animate() {
   updateCharge(dt);
   updateCharFx(dt);
   if (gameStarted && !isGoalScene) updateBachira(dt);
-  if (gameStarted && !isGoalScene) updateShidouJump(dt);
+  if (gameStarted && !isGoalScene) updateShidouSkill(dt);
 
   if (gameStarted) {
   if (!isGoalScene) {
