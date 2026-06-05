@@ -3141,7 +3141,9 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     });
     if (tackleBtn) tackleBtn.style.display = hasBall ? 'none' : '';
     if (skillBtn)  skillBtn.style.display  = hasBall ? '' : 'none';
-    if (passBtn)   passBtn.style.display   = (mode2v2 && hasBall) ? '' : 'none';
+    // #btn-pass はCSSで display:none を指定しているため、表示時は明示的に flex を入れる
+    // （'' だとCSSのnoneに戻り、ボタンが出ないため）。
+    if (passBtn)   passBtn.style.display   = (mode2v2 && hasBall) ? 'flex' : 'none';
   }
   // animate() から呼べるようにグローバル化
   window._updateMobileButtons = updateMobileButtons;
