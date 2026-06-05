@@ -350,10 +350,14 @@ function useSkill() {
 //  1) fakeKick_01 の接触でボールを真上へポップ
 //  2) fakeKick_02 の接触（落下してきたタイミング）で前方へ強烈に発射
 const FAKE_BLEND     = 0.12; // 連結時の繋ぎ目（buildComboClipと合わせる）
-const FAKE_POP_FRAC  = 0.5;  // motion1 のどこでボールを上げるか（0..1）
-const FAKE_HIT_FRAC  = 0.5;  // motion2 のどこで蹴り当てるか（0..1）
-const FAKE_CONTACT_H = 0.95; // 蹴り当てる高さ(m)
+// 足ボーン実測: motion1は t≈0.31s(約0.42)で足が最下点＝すくい上げ接触、
+// motion2は開始直後 t≈0.1〜0.4s(約0.12)で足が前方へ鋭くスイング＝蹴り抜き。
+// 接触をmotion2前半に合わせることで滞空が短くなり、蹴り上げが低く収まる。
+const FAKE_POP_FRAC  = 0.42; // motion1 のどこでボールを上げるか（0..1）
+const FAKE_HIT_FRAC  = 0.12; // motion2 のどこで蹴り当てるか（0..1）
+const FAKE_CONTACT_H = 1.0;  // 蹴り当てる高さ(m)
 const FAKE_POWER     = 32;   // 発射の水平初速（強烈）
+const FAKE_VYPOP_MAX = 13;   // 蹴り上げ初速の上限（高くなりすぎ防止 / ピーク約3.9m）
 function nagiFakeVolley() {
   if (ballOwner !== 'player') return;
   const c1 = clips['fake01'], c2 = clips['fake02'];
@@ -373,7 +377,9 @@ function nagiFakeVolley() {
   const dtAir    = Math.max(0.2, tContact - tPop);
   const h0       = ballMesh.position.y;
   // 落下してちょうど接触高さに来るポップ初速: h(dt)=h0+vy*dt-0.5g dt^2 = CONTACT_H
-  const vyPop    = (FAKE_CONTACT_H - h0 + 0.5 * BALL_GRAVITY * dtAir * dtAir) / dtAir;
+  // 高くなりすぎないよう上限でクランプ（上限時は接触が多少早まる）。
+  const vyPop    = Math.min(FAKE_VYPOP_MAX,
+    (FAKE_CONTACT_H - h0 + 0.5 * BALL_GRAVITY * dtAir * dtAir) / dtAir);
 
   // スキル中はボールを拾い直されないようロック
   playerPickupCooldown = tContact + 0.3;
