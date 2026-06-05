@@ -416,20 +416,22 @@ function nagiFakeVolley() {
 
 // 馬狼: ほんの少し曲がる強烈カーブシュート（赤黒の残像）
 const BAROU_HIT_FRAC = 0.32; // 接触タイミング（実測: 足が前方頂点 t≈0.7/2.2）
-const BAROU_POWER    = 19;   // 強めの水平初速
+const BAROU_POWER    = 34;   // 強烈な水平初速
 const BAROU_CURVE    = 0.4;  // ほんの少しだけ曲げる
+const BAROU_FOLLOW   = 0.5;  // 接触後のフォロースルー時間（これ以降のジョグ部は再生しない）
 function barouCurveShot() {
   if (ballOwner !== 'player') return;
   const clip = clips['barou_shot'];
   if (!clip || !mixer) { startKick(false, playerFootSign, 1.9); return; }
   endSpin();
   isKicking = true;
-  kickTimer = clip.duration + 0.1;
+  const tHit = clip.duration * BAROU_HIT_FRAC;
+  // 接触＋フォロースルーで打ち切る（クリップ後半のジョグ＝2回目の振りを出さない）。
+  kickTimer = tHit + BAROU_FOLLOW;
   fadeToClip('barou_shot', false);
-  playerPickupCooldown = clip.duration; enemyPickupCooldown = clip.duration;
+  playerPickupCooldown = tHit + BAROU_FOLLOW; enemyPickupCooldown = tHit + BAROU_FOLLOW;
 
   const sid = ++skillSession;
-  const tHit = clip.duration * BAROU_HIT_FRAC;
   setTimeout(() => {
     if (sid !== skillSession || !gameStarted || isGoalScene) return;
     const ry  = player.rotation.y;
