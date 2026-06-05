@@ -2959,16 +2959,21 @@ function animate() {
       charClampToField(playerChar);
 
       // 視点の遅延追従。移動中はプレイヤーの向き（=進行方向）に追従。
-      // 2vs2で静止時はオフェンス/ディフェンスでデフォルト向きを変える:
-      //   オフェンス(自チーム保持)=敵ゴール(+X, viewAngle=-π/2)
-      //   ディフェンス            =自ゴール(-X, viewAngle=+π/2)
+      // 2vs2で静止時はデフォルトでボール保持者の方を向く（ルーズ時はボール）。
+      // 自分が保持中はその場の向きを維持。GK保持中は作動させず（投げたら切替）。
       if (!keys.has('KeyQ') && !keys.has('KeyE') && !lookSwipe.active) {
         const isMoving = moveVec.lengthSq() > 0.001;
         let targetAng = player.rotation.y;
-        // GK保持中はデフォルト視点を作動させず従来どおり進行方向追従。投げたら切替。
         if (mode2v2 && !isMoving && gkBallHolder === 'none') {
-          const offense = (ballOwner === 'player' || ballOwner === 'ally');
-          targetAng = offense ? -Math.PI / 2 : Math.PI / 2;
+          let holderPos = null;
+          if      (ballOwner === 'ally')   holderPos = ally.position;
+          else if (ballOwner === 'enemy')  holderPos = enemy.position;
+          else if (ballOwner === 'enemy2') holderPos = enemy2.position;
+          else if (ballOwner === 'none')   holderPos = ballMesh.position; // ルーズ=ボールを向く
+          if (holderPos) {
+            const dx = holderPos.x - player.position.x, dz = holderPos.z - player.position.z;
+            if (dx * dx + dz * dz > 0.25) targetAng = Math.atan2(-dx, -dz);
+          }
         }
         let camDiff = targetAng - viewAngle;
         while (camDiff >  Math.PI) camDiff -= 2 * Math.PI;
