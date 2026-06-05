@@ -2520,11 +2520,8 @@ function updateCharFx(dt) {
       // 残像は motion2（急加速）からのみ。motion1（その場フェイント）では出さない。
       _ghostTimer += dt;
       if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xffd400); }
-    } else if (shidouJumpTimer > 0) {
-      // 士道: スキル中ずっと黄＆ピンクの残像を交互に（ジャンプに追従）
-      _ghostTimer += dt;
-      if (_ghostTimer >= 0.04) { _ghostTimer = 0; spawnCharGhost(Math.random() < 0.5 ? 0xffd400 : 0xff3399); }
     }
+    // 士道はゴースト残像なし。黄＆ピンクの水玉オーラのみ（上の spawnAuraParticle）。
   }
 
   for (let i = auraParticles.length - 1; i >= 0; i--) {
