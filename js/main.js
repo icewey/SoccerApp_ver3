@@ -217,6 +217,7 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
 
   const pwr = power;
   const isCurve = curve !== 0;
+  resetBallTrail(); // 通常シュートは青い軌道に戻す
 
   if (isCurve) {
     // カーブキック: 蹴り出しを foot 側へ振り、空中で逆へ曲げるバナナ軌道。
@@ -333,16 +334,21 @@ function startTackle() {
 // ── 固有スキル ────────────────────────────────────────────────────────────
 // キャラID → スキル種別。未登録は 'spin'（全員デフォルトでスピン）。
 const SKILL_BY_CHAR = {
-  nagi: 'fake_volley', // 凪: 2段式フェイクボレー（FBX連結＋特殊ボール挙動）
+  nagi:    'fake_volley',   // 凪: 2段式フェイクボレー（黒エフェクト）
+  barou:   'barou_curve',   // 馬狼: ほんの少し曲がる強烈カーブ（赤黒エフェクト）
+  chigiri: 'chigiri_boost', // 千切: ドリブル突破・加速（ピンクエフェクト）
 };
 let playerSkill  = 'spin';
 let skillSession = 0; // スキル中の stale setTimeout を無効化するカウンタ
+let chigiriBoostTimer = 0; // 千切ブースト残り時間（>0で加速・奪取不可・ピンク残像）
 
 // スキルボタン/キーの共通エントリ。所持スキルに応じて分岐。
 function useSkill() {
   if (!gameStarted || isGoalScene || playerStunTimer > 0) return;
   if (isKicking || isPassing || isTackling) return;
-  if (playerSkill === 'fake_volley') nagiFakeVolley();
+  if      (playerSkill === 'fake_volley')   nagiFakeVolley();
+  else if (playerSkill === 'barou_curve')   barouCurveShot();
+  else if (playerSkill === 'chigiri_boost') chigiriBoost();
   else startSpin(); // デフォルト: スピン（ドリブル中のみ・内部でガード）
 }
 
@@ -356,7 +362,7 @@ const FAKE_BLEND     = 0.12; // 連結時の繋ぎ目（buildComboClipと合わ�
 const FAKE_POP_FRAC  = 0.42; // motion1 のどこでボールを上げるか（0..1）
 const FAKE_HIT_FRAC  = 0.12; // motion2 のどこで蹴り当てるか（0..1）
 const FAKE_CONTACT_H = 1.0;  // 蹴り当てる高さ(m)
-const FAKE_POWER     = 32;   // 発射の水平初速（強烈）
+const FAKE_POWER     = 44;   // 発射の水平初速（かなり強烈）
 const FAKE_VYPOP_MAX = 13;   // 蹴り上げ初速の上限（高くなりすぎ防止 / ピーク約3.9m）
 function nagiFakeVolley() {
   if (ballOwner !== 'player') return;
@@ -398,13 +404,56 @@ function nagiFakeVolley() {
     ballVel.set(0, vyPop, 0); // 真上
   }, tPop * 1000);
 
-  // ② 落ちてきたボールを前方へ強烈に蹴り出す
+  // ② 落ちてきたボールを前方へ強烈に蹴り出す（黒い残像）
   setTimeout(() => {
     if (sid !== skillSession || !gameStarted || isGoalScene) return;
     const fwd = facing();
     ballOwner = 'none'; ballCurveRate = 0; ballSpin.set(0, 0, 0);
     ballVel.set(fwd.x * FAKE_POWER, 7, fwd.z * FAKE_POWER);
+    setBallTrail([0x080808, 0x202020], THREE.NormalBlending); // 黒の軌道
   }, tContact * 1000);
+}
+
+// 馬狼: ほんの少し曲がる強烈カーブシュート（赤黒の残像）
+const BAROU_HIT_FRAC = 0.32; // 接触タイミング（実測: 足が前方頂点 t≈0.7/2.2）
+const BAROU_POWER    = 19;   // 強めの水平初速
+const BAROU_CURVE    = 0.4;  // ほんの少しだけ曲げる
+function barouCurveShot() {
+  if (ballOwner !== 'player') return;
+  const clip = clips['barou_shot'];
+  if (!clip || !mixer) { startKick(false, playerFootSign, 1.9); return; }
+  endSpin();
+  isKicking = true;
+  kickTimer = clip.duration + 0.1;
+  fadeToClip('barou_shot', false);
+  playerPickupCooldown = clip.duration; enemyPickupCooldown = clip.duration;
+
+  const sid = ++skillSession;
+  const tHit = clip.duration * BAROU_HIT_FRAC;
+  setTimeout(() => {
+    if (sid !== skillSession || !gameStarted || isGoalScene) return;
+    const ry  = player.rotation.y;
+    const fwd = new THREE.Vector3(-Math.sin(ry), 0, -Math.cos(ry));
+    // 蹴り出しを foot 側へわずかに振り、飛行中にほんの少し逆へ曲げる
+    const kickAngle = ry - playerFootSign * BAROU_CURVE * (Math.PI / 8);
+    ballOwner = 'none'; isDribbling = false; ballSpin.set(0, 0, 0);
+    ballMesh.position.set(player.position.x + fwd.x * 0.5, BALL_R + 0.1, player.position.z + fwd.z * 0.5);
+    ballVel.set(-Math.sin(kickAngle) * BAROU_POWER, 9, -Math.cos(kickAngle) * BAROU_POWER);
+    ballCurveRate = playerFootSign * BAROU_CURVE; // 控えめなカーブ
+    setBallTrail([0xcc1111, 0x0a0a0a], THREE.NormalBlending); // 赤黒の軌道
+  }, tHit * 1000);
+}
+
+// 千切: ドリブル突破（加速）。連結したブースト走モーション中は
+// 移動速度2倍・ボール奪取不可・ピンクの残像/オーラ。
+const CHIGIRI_SPEED_MULT = 2.0;
+function chigiriBoost() {
+  if (ballOwner !== 'player' || chigiriBoostTimer > 0) return;
+  if (!clips['chigiri_run'] && clips['chigiri01'] && clips['chigiri02']) {
+    buildComboClip('chigiri_run', ['chigiri01', 'chigiri02'], 0.1);
+  }
+  const combo = clips['chigiri_run'];
+  chigiriBoostTimer = combo ? combo.duration : 1.8;
 }
 
 // ── 敵シュート（charShoot を使用）────────────────────────────────────────
@@ -515,8 +564,10 @@ function updateEnemy(dt) {
   const distToBall = new THREE.Vector3().subVectors(ballMesh.position, enemy.position).setY(0).length();
 
   // タックルによる奪取（プレイヤーと同じ TACKLE_DIST を使用）
+  // 千切ブースト中(chigiriBoostTimer>0)はプレイヤーからは奪えない。
   if (enemyTackling && ballOwner !== 'enemy' && distToBall < TACKLE_DIST
-      && enemyPickupCooldown <= 0 && !isKicking && gkBallHolder === 'none') {
+      && enemyPickupCooldown <= 0 && !isKicking && gkBallHolder === 'none'
+      && !(ballOwner === 'player' && chigiriBoostTimer > 0)) {
     const stolen = ballOwner === 'player';
     ballOwner = 'enemy';
     playerPickupCooldown = 0.6;
@@ -589,6 +640,10 @@ function updateEnemy(dt) {
 // マルチプレイでも常に呼ぶ。物理シミュとゴール判定は含まない。
 function updateLocalPlayerBall(dt) {
   if (!gameStarted || isGoalScene || gkBallHolder !== 'none') return;
+  // 千切ブースト中は奪われず保持し続ける（シュート中は除く）
+  if (chigiriBoostTimer > 0 && !isKicking) {
+    ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); return;
+  }
 
   if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
 
@@ -642,6 +697,10 @@ function updateBall(dt) {
   if (!gameStarted) return;
   if (isGoalScene) return; // ゴールシーン中は物理停止
   if (gkBallHolder !== 'none') { isDribbling = false; return; }
+  // 千切ブースト中は奪われず保持し続ける（シュート中は除く）
+  if (chigiriBoostTimer > 0 && !isKicking) {
+    ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); return;
+  }
 
   const toPlayer   = new THREE.Vector3().subVectors(ballMesh.position, player.position);
   toPlayer.y = 0;
@@ -1199,6 +1258,8 @@ function mpResetAfterGoal() {
   spinTimer = tackleTimer = kickTimer = 0;
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
+  chigiriBoostTimer = 0;
+  resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
   if (mixer)           { mixer.stopAllAction(); current = null; }
@@ -1219,6 +1280,8 @@ function resetAfterGoal(scorer) {
   spinTimer = tackleTimer = kickTimer = 0;
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
+  chigiriBoostTimer = 0;
+  resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
 
@@ -1330,6 +1393,8 @@ function pkPlaceForKick() {
   spinTimer = tackleTimer = kickTimer = 0;
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
+  chigiriBoostTimer = 0;
+  resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.catchAnimTimer = 0;
@@ -1410,6 +1475,11 @@ const ANIM_FILES = [
   // 凪の固有スキル「2段式フェイクボレー」用（連結して使う）
   ['fake01', './animations/2段式フェイクボレー/fakeKick_01.fbx'],
   ['fake02', './animations/2段式フェイクボレー/fakeKick_02.fbx'],
+  // 馬狼の固有スキル「カーブシュート」用
+  ['barou_shot', './animations/馬狼シュート/Strike Foward Jog.fbx'],
+  // 千切の固有スキル「ドリブル突破（加速）」用（連結して使う）
+  ['chigiri01', './animations/千切スキル加速/BoostRun01.fbx'],
+  ['chigiri02', './animations/千切スキル加速/BoostRun02.fbx'],
 ];
 let CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ（敵追加時はstartGame内で+1）
 let coreReady = 0;
@@ -1559,6 +1629,9 @@ export function startGame(config) {
   // 固有スキル: キャラIDから決定（未登録は spin）
   playerSkill = SKILL_BY_CHAR[config.charId] || 'spin';
   skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
+  chigiriBoostTimer = 0;
+  resetBallTrail();
+  clearCharFx();
   cancelCharge();
   // ── 前ゲームの残骸を全てクリア ────────────────────────────────────
   // player の旧キャラ削除
@@ -1864,6 +1937,7 @@ const LEAD_MIN_MOVE = 0.01; // この移動量(/frame)未満は停止扱い→�
 
 function getDesiredAnim() {
   if (isKicking || isPassing || isTackling) return null;
+  if (chigiriBoostTimer > 0 && clips['chigiri_run']) return 'chigiri_run'; // 千切ブースト走（ループ）
   if (isSpinning && isDribbling) return 'spin';
   const fwd    = keys.has('KeyW') || keys.has('ArrowUp');
   const bwd    = keys.has('KeyS') || keys.has('ArrowDown');
@@ -2014,12 +2088,22 @@ const TRAIL_INTERVAL  = 0.014; // 残像の生成間隔（秒）。短いほど�
 const TRAIL_MAX_LIFE  = 0.32;  // 残像1個の寿命（秒）
 const TRAIL_OPACITY   = 0.55;
 
+// 軌道の色はシュート種別ごとに切り替える。デフォルトは青(加算で光る)。
+// 暗い色(黒/赤黒)は加算だと見えないので NormalBlending を指定する。
+const TRAIL_DEFAULT_COLORS = [0x3da5ff];
+let ballTrailColors = TRAIL_DEFAULT_COLORS;
+let ballTrailBlend  = THREE.AdditiveBlending;
+let _trailColorIdx  = 0;
+function setBallTrail(colors, blend) { ballTrailColors = colors; ballTrailBlend = blend; }
+function resetBallTrail() { ballTrailColors = TRAIL_DEFAULT_COLORS; ballTrailBlend = THREE.AdditiveBlending; }
+
 function spawnBallTrail() {
+  const color = ballTrailColors[_trailColorIdx++ % ballTrailColors.length];
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(BALL_R * 1.15, 10, 10),
     new THREE.MeshBasicMaterial({
-      color: 0x3da5ff, transparent: true, opacity: TRAIL_OPACITY,
-      blending: THREE.AdditiveBlending, depthWrite: false
+      color, transparent: true, opacity: TRAIL_OPACITY,
+      blending: ballTrailBlend, depthWrite: false
     })
   );
   mesh.position.copy(ballMesh.position);
@@ -2046,6 +2130,76 @@ function updateBallTrail(dt) {
       ballTrail.splice(i, 1);
     }
   }
+}
+
+// ── キャラのオーラ＆残像（スキルエフェクト）─────────────────────────────
+// 凪: 常に黒いオーラが漂う。千切: ブースト中はピンクのオーラ＋残像（シルエット）。
+const auraParticles = [];
+const charGhosts    = [];
+let _auraTimer  = 0;
+let _ghostTimer = 0;
+
+function spawnAuraParticle(target, color, blend) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.06 + Math.random() * 0.06, 6, 6),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, blending: blend, depthWrite: false })
+  );
+  const a = Math.random() * Math.PI * 2, r = 0.25 + Math.random() * 0.4;
+  mesh.position.set(target.position.x + Math.cos(a) * r, 0.2 + Math.random() * 1.5, target.position.z + Math.sin(a) * r);
+  scene.add(mesh);
+  auraParticles.push({ mesh, vy: 0.4 + Math.random() * 0.7, life: 0, maxLife: 0.5 + Math.random() * 0.5, baseOp: 0.6 });
+}
+
+function spawnCharGhost(color) {
+  const mesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.22, 1.1, 4, 8),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, depthWrite: false })
+  );
+  mesh.position.copy(player.position); mesh.position.y += 0.7;
+  mesh.rotation.y = player.rotation.y;
+  scene.add(mesh);
+  charGhosts.push({ mesh, life: 0, maxLife: 0.35, baseOp: 0.45 });
+}
+
+function updateCharFx(dt) {
+  if (chigiriBoostTimer > 0) chigiriBoostTimer -= dt;
+
+  // 発生: 凪=常時黒オーラ / 千切=ブースト中ピンクのオーラ＋残像
+  if (gameStarted && !isGoalScene) {
+    _auraTimer += dt;
+    if (_auraTimer >= 0.045) {
+      _auraTimer = 0;
+      if (playerSkill === 'fake_volley') spawnAuraParticle(player, 0x0a0a0a, THREE.NormalBlending);
+      if (chigiriBoostTimer > 0)          spawnAuraParticle(player, 0xff3399, THREE.NormalBlending);
+    }
+    if (chigiriBoostTimer > 0) {
+      _ghostTimer += dt;
+      if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xff3399); }
+    }
+  }
+
+  for (let i = auraParticles.length - 1; i >= 0; i--) {
+    const p = auraParticles[i];
+    p.life += dt;
+    const t = p.life / p.maxLife;
+    p.mesh.position.y += p.vy * dt;
+    p.mesh.material.opacity = p.baseOp * (1 - t);
+    p.mesh.scale.setScalar(1 - t * 0.4);
+    if (p.life >= p.maxLife) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); auraParticles.splice(i, 1); }
+  }
+  for (let i = charGhosts.length - 1; i >= 0; i--) {
+    const g = charGhosts[i];
+    g.life += dt;
+    const t = g.life / g.maxLife;
+    g.mesh.material.opacity = g.baseOp * (1 - t);
+    if (g.life >= g.maxLife) { scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose(); charGhosts.splice(i, 1); }
+  }
+}
+
+function clearCharFx() {
+  for (const p of auraParticles) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); }
+  for (const g of charGhosts)    { scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose(); }
+  auraParticles.length = 0; charGhosts.length = 0;
 }
 
 const clock = new THREE.Clock();
@@ -2138,6 +2292,7 @@ function animate() {
   updateBallTrail(dt);
   updateStunMarks(dt);
   updateCharge(dt);
+  updateCharFx(dt);
 
   if (gameStarted) {
   if (!isGoalScene) {
@@ -2174,7 +2329,8 @@ function animate() {
 
       if (moveVec.lengthSq() > 0.001) {
         moveVec.normalize();
-        player.position.addScaledVector(moveVec, RUN_SPEED * dt);
+        const moveSpeed = RUN_SPEED * (chigiriBoostTimer > 0 ? CHIGIRI_SPEED_MULT : 1);
+        player.position.addScaledVector(moveVec, moveSpeed * dt);
 
         if (wantTurn) {
           const targetAngle = Math.atan2(-moveVec.x, -moveVec.z);
