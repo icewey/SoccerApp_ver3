@@ -258,51 +258,95 @@
       text-transform: uppercase;
     }
 
-    /* ── character row ── */
-    #lb-row {
-      display: flex;
-      gap: 14px;
-      align-items: flex-end;
-      justify-content: center;
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      padding: 12px 8px 24px;
+    /* ── character carousel (3D wheel) ── */
+    .lb-stage {
+      position: relative;
+      z-index: 1;
       width: 100%;
-      max-width: 1020px;
-      scrollbar-width: none;
+      max-width: 1040px;
+      height: 326px;
+      perspective: 1150px;
+      perspective-origin: 50% 42%;
+      touch-action: none;
+      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
     }
-    #lb-row::-webkit-scrollbar { display: none; }
+    .lb-stage:active { cursor: grabbing; }
+
+    /* reflective floor under the wheel */
+    .lb-stage::after {
+      content: '';
+      position: absolute;
+      left: 50%; bottom: 30px;
+      width: 360px; height: 60px;
+      transform: translateX(-50%);
+      background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(0,200,255,0.16), transparent 70%);
+      filter: blur(4px);
+      pointer-events: none;
+    }
+
+    #lb-wheel {
+      position: absolute;
+      left: 50%; top: 50%;
+      width: 180px; height: 258px;
+      margin-left: -90px; margin-top: -140px;
+      transform-style: preserve-3d;
+      --wheel-r: 340px;
+      will-change: transform;
+    }
 
     .lb-card {
-      flex-shrink: 0;
-      position: relative;
-      width: 110px;
-      height: 162px;
-      border-radius: 10px;
+      position: absolute;
+      inset: 0;
+      border-radius: 12px;
       overflow: hidden;
-      border: 1.5px solid rgba(255,255,255,0.09);
+      border: 1.5px solid rgba(255,255,255,0.10);
       background: rgba(255,255,255,0.03);
       cursor: pointer;
-      transition:
-        width  0.38s cubic-bezier(0.34,1.56,0.64,1),
-        height 0.38s cubic-bezier(0.34,1.56,0.64,1),
-        border-color 0.25s,
-        box-shadow   0.25s;
-    }
-
-    .lb-card:hover:not(.lb-locked) {
-      border-color: rgba(255,255,255,0.22);
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+      transition: opacity 0.45s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45);
     }
 
     .lb-card.lb-selected {
-      width: 172px;
-      height: 248px;
       border-color: var(--cc, #00d4ff);
       box-shadow:
-        0 0 22px var(--cc, #00d4ff),
-        0 0 64px color-mix(in srgb, var(--cc,#00d4ff) 28%, transparent),
-        inset 0 0 18px rgba(0,0,0,0.25);
+        0 0 26px var(--cc, #00d4ff),
+        0 0 78px color-mix(in srgb, var(--cc,#00d4ff) 32%, transparent),
+        0 18px 44px rgba(0,0,0,0.55),
+        inset 0 0 20px rgba(0,0,0,0.22);
     }
+
+    /* ── carousel nav arrows ── */
+    .lb-nav {
+      position: absolute;
+      top: 46%;
+      transform: translateY(-50%);
+      z-index: 6;
+      width: 48px; height: 48px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%;
+      background: rgba(10,16,28,0.55);
+      border: 1.5px solid rgba(255,255,255,0.16);
+      color: rgba(255,255,255,0.8);
+      font-size: 1.7rem; line-height: 1;
+      cursor: pointer;
+      font-family: inherit;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      transition: all 0.2s;
+    }
+    .lb-nav:hover {
+      background: rgba(0,200,255,0.16);
+      border-color: rgba(0,212,255,0.6);
+      color: #fff;
+      box-shadow: 0 0 22px rgba(0,212,255,0.35);
+    }
+    .lb-nav:active { transform: translateY(-50%) scale(0.9); }
+    .lb-nav-prev { left: 4%; }
+    .lb-nav-next { right: 4%; }
 
     .lb-card.lb-locked {
       cursor: default;
@@ -400,107 +444,88 @@
 
     .lb-tm-toggle {
       display: flex;
-      background: rgba(255,255,255,0.05);
-      border-radius: 9px;
-      padding: 3px;
-      gap: 3px;
-      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      border-radius: 11px;
+      padding: 4px;
+      gap: 4px;
+      border: 1px solid rgba(255,255,255,0.10);
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.35);
     }
 
     .lb-tm-btn {
+      position: relative;
       background: transparent;
       border: none;
-      color: rgba(255,255,255,0.38);
+      color: rgba(255,255,255,0.42);
       padding: 8px 22px;
-      border-radius: 6px;
+      border-radius: 8px;
       cursor: pointer;
       font-size: 0.88rem;
+      font-weight: 700;
       letter-spacing: 2px;
-      transition: all 0.18s;
+      transition: all 0.2s;
       font-family: inherit;
     }
     .lb-tm-btn.active {
-      background: rgba(255,255,255,0.1);
+      background: linear-gradient(135deg, rgba(0,212,255,0.28), rgba(0,150,255,0.14));
       color: #fff;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+      box-shadow: 0 0 16px rgba(0,200,255,0.3), inset 0 0 0 1px rgba(0,212,255,0.45);
+      text-shadow: 0 0 10px rgba(0,212,255,0.5);
     }
-    .lb-tm-btn:hover:not(.active) { color: rgba(255,255,255,0.65); }
+    .lb-tm-btn:hover:not(.active) { color: rgba(255,255,255,0.78); }
 
-    /* ── kick off button ── */
-    #lb-kickoff {
+    /* ── action buttons (angular neon) ── */
+    .lb-btn-row { display: flex; gap: 14px; align-items: stretch; justify-content: center; flex-wrap: wrap; }
+
+    .lb-act {
+      --ac: #00d4ff;
       position: relative;
-      background: transparent;
-      border: 2px solid #00d4ff;
-      color: #00d4ff;
-      padding: 15px 62px;
-      font-size: 1.05rem;
-      font-weight: 700;
-      letter-spacing: 9px;
+      isolation: isolate;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg,
+          color-mix(in srgb, var(--ac) 16%, transparent),
+          color-mix(in srgb, var(--ac) 4%, transparent));
+      border: 1.6px solid color-mix(in srgb, var(--ac) 70%, transparent);
+      color: var(--ac);
+      font-weight: 800;
       text-transform: uppercase;
       cursor: pointer;
-      border-radius: 3px;
-      overflow: hidden;
-      transition: all 0.28s;
       font-family: inherit;
+      transition: transform 0.2s, box-shadow 0.28s, background 0.28s, color 0.2s;
+      clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+      text-shadow: 0 0 12px color-mix(in srgb, var(--ac) 55%, transparent);
     }
-
-    #lb-kickoff::before {
+    /* sheen sweep */
+    .lb-act::before {
       content: '';
       position: absolute;
-      top: 0; left: -120%; bottom: 0; width: 60%;
-      background: linear-gradient(90deg, transparent, rgba(0,212,255,0.18), transparent);
-      transition: left 0.5s;
+      top: 0; left: -130%; bottom: 0; width: 55%;
+      background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ac) 38%, transparent), transparent);
+      transform: skewX(-18deg);
+      transition: left 0.55s ease;
+      z-index: -1;
     }
+    .lb-act:hover {
+      color: #04121a;
+      background: linear-gradient(135deg, var(--ac), color-mix(in srgb, var(--ac) 78%, #ffffff));
+      box-shadow: 0 0 30px color-mix(in srgb, var(--ac) 50%, transparent),
+                  0 10px 26px rgba(0,0,0,0.4);
+      transform: translateY(-3px);
+      text-shadow: none;
+    }
+    .lb-act:hover::before { left: 160%; }
+    .lb-act:active { transform: translateY(-1px) scale(0.98); }
 
-    #lb-kickoff:hover {
-      background: rgba(0,212,255,0.07);
-      box-shadow: 0 0 32px rgba(0,212,255,0.32), inset 0 0 24px rgba(0,212,255,0.04);
-      transform: translateY(-2px);
+    /* primary: KICK OFF */
+    #lb-kickoff {
+      --ac: #00e0ff;
+      padding: 16px 64px;
+      font-size: 1.08rem;
+      letter-spacing: 9px;
     }
-    #lb-kickoff:hover::before { left: 160%; }
-    #lb-kickoff:active { transform: translateY(0); }
-
-    /* ── ボタン行 + PK戦ボタン ── */
-    .lb-btn-row { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; }
-    #lb-pk {
-      background: transparent;
-      border: 2px solid #ffd24a;
-      color: #ffd24a;
-      padding: 15px 30px;
-      font-size: 1.0rem;
-      font-weight: 700;
-      letter-spacing: 5px;
-      cursor: pointer;
-      border-radius: 3px;
-      transition: all 0.28s;
-      font-family: inherit;
-    }
-    #lb-pk:hover {
-      background: rgba(255,210,74,0.08);
-      box-shadow: 0 0 28px rgba(255,210,74,0.3);
-      transform: translateY(-2px);
-    }
-    #lb-pk:active { transform: translateY(0); }
-
-    #lb-2v2 {
-      background: transparent;
-      border: 2px solid #5ae696;
-      color: #5ae696;
-      padding: 15px 30px;
-      font-size: 1.0rem;
-      font-weight: 700;
-      letter-spacing: 5px;
-      cursor: pointer;
-      border-radius: 3px;
-      transition: all 0.28s;
-      font-family: inherit;
-    }
-    #lb-2v2:hover {
-      background: rgba(90,230,150,0.08);
-      box-shadow: 0 0 28px rgba(90,230,150,0.3);
-      transform: translateY(-2px);
-    }
-    #lb-2v2:active { transform: translateY(0); }
+    #lb-2v2 { --ac: #5ae696; padding: 16px 30px; font-size: 1rem; letter-spacing: 4px; }
+    #lb-pk  { --ac: #ffd24a; padding: 16px 30px; font-size: 1rem; letter-spacing: 4px; }
 
     /* ── keyboard hint ── */
     .lb-hint {
@@ -676,24 +701,38 @@
       .lb-header { padding: 14px 18px 0; }
       .lb-title  { font-size: 1.05rem; letter-spacing: 3px; }
       .lb-ball   { font-size: 1.5rem; }
-      .lb-body   { gap: 20px; padding-bottom: 28px; }
-      .lb-card   { width: 80px; height: 120px; }
-      .lb-card.lb-selected { width: 130px; height: 192px; }
+      .lb-body   { gap: 18px; padding-bottom: 24px; }
+      .lb-stage  { height: 250px; perspective: 820px; }
+      #lb-wheel  { width: 132px; height: 192px; margin-left: -66px; margin-top: -104px; --wheel-r: 215px; }
+      .lb-nav    { width: 40px; height: 40px; font-size: 1.4rem; }
+      .lb-nav-prev { left: 1%; }
+      .lb-nav-next { right: 1%; }
       #lb-kickoff { padding: 13px 38px; font-size: 0.9rem; letter-spacing: 5px; }
+      #lb-2v2, #lb-pk { padding: 13px 20px; font-size: 0.9rem; }
       .lb-tm-btn  { padding: 7px 16px; }
     }
 
     /* ── リアル対戦 ── */
-    #lb-mode-row { display: flex; gap: 8px; }
+    #lb-mode-row {
+      display: flex; gap: 4px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 22px; padding: 4px;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.35);
+    }
     .lb-mode-btn {
       background: transparent;
-      border: 1px solid rgba(255,255,255,0.18);
-      color: rgba(255,255,255,0.4);
-      padding: 7px 22px; border-radius: 20px;
-      cursor: pointer; font-size: 0.78rem; letter-spacing: 3px;
-      font-family: inherit; transition: all 0.18s;
+      border: none;
+      color: rgba(255,255,255,0.45);
+      padding: 8px 24px; border-radius: 18px;
+      cursor: pointer; font-size: 0.78rem; font-weight: 700; letter-spacing: 3px;
+      font-family: inherit; transition: all 0.2s;
     }
-    .lb-mode-btn.active { background: rgba(255,255,255,0.1); color:#fff; border-color:rgba(255,255,255,0.4); }
+    .lb-mode-btn.active {
+      background: linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.07));
+      color:#fff;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.22), 0 2px 10px rgba(0,0,0,0.3);
+    }
     #mp-panel { display: none; flex-direction: column; align-items: center; gap: 16px; width: 100%; }
     #mp-panel.open { display: flex; }
     .mp-btns { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
@@ -753,7 +792,11 @@
     <main class="lb-body">
       <p class="lb-section-label">Select your player</p>
 
-      <div id="lb-row"></div>
+      <div class="lb-stage" id="lb-stage">
+        <button class="lb-nav lb-nav-prev" id="lb-prev" aria-label="前のキャラ">‹</button>
+        <div id="lb-wheel"></div>
+        <button class="lb-nav lb-nav-next" id="lb-next" aria-label="次のキャラ">›</button>
+      </div>
 
       <!-- モード切替 -->
       <div id="lb-mode-row">
@@ -772,11 +815,11 @@
           </div>
         </div>
         <div class="lb-btn-row">
-          <button id="lb-kickoff">KICK OFF</button>
-          <button id="lb-2v2">2vs2</button>
-          <button id="lb-pk">PK戦</button>
+          <button class="lb-act" id="lb-kickoff">KICK OFF</button>
+          <button class="lb-act" id="lb-2v2">2vs2</button>
+          <button class="lb-act" id="lb-pk">PK戦</button>
         </div>
-        <span class="lb-hint">← → で選択　　Enter でスタート</span>
+        <span class="lb-hint">ドラッグ / ← → で選択　　Enter でスタート</span>
       </div>
 
       <!-- リアル対戦パネル -->

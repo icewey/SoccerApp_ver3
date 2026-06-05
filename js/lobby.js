@@ -85,17 +85,28 @@ let mpMode       = false;   // true = リアル対戦モード
 let currentCode  = null;    // 作成/参加中のルームコード
 let roomWatcher  = null;    // Firebase unsubscribe 関数
 
+// ── 3Dカルーセル（円形ホイール） ──────────────────────────────────────
+const N          = CHARACTERS.length;
+const WHEEL_STEP = 360 / N;     // カード1枚あたりの角度
+const DRAG_SENS  = 0.45;        // ドラッグ1pxあたりの回転角(度)
+let wheelRot     = 0;           // ホイールの連続回転角(度・累積)
+let drag         = null;        // {x, rot, moved}
+
+function cardBaseTransform(i) {
+  return `rotateY(${i * WHEEL_STEP}deg) translateZ(var(--wheel-r))`;
+}
+
 function buildCard(char, idx) {
   const card = document.createElement('div');
-  card.className = 'lb-card'
-    + (idx === selectedIdx ? ' lb-selected' : '')
-    + (!char.available ? ' lb-locked' : '');
+  card.className = 'lb-card' + (!char.available ? ' lb-locked' : '');
   card.style.setProperty('--cc', char.color);
+  card.style.transform = cardBaseTransform(idx);
+  card.dataset.idx = String(idx);
 
   const img = document.createElement('img');
   img.src = char.portrait;
   img.alt = char.name;
-  img.loading = 'lazy';
+  img.draggable = false;
   card.appendChild(img);
 
   const overlay = document.createElement('div');
@@ -120,27 +131,106 @@ function buildCard(char, idx) {
   }
 
   if (char.available) {
-    card.addEventListener('click', () => selectChar(idx));
-    card.addEventListener('touchend', e => { e.preventDefault(); selectChar(idx); });
+    card.addEventListener('click', () => { if (!drag || !drag.moved) selectChar(idx); });
   }
   return card;
+}
+
+// 現在の回転から正面に来ているカードのindexを返す
+function frontIndex() {
+  const i = Math.round(-wheelRot / WHEEL_STEP);
+  return ((i % N) + N) % N;
+}
+
+// ホイールへ回転を反映し、各カードの見た目（正面ハイライト・奥行きのフェード）を更新
+function applyWheel(animate) {
+  const wheel = document.getElementById('lb-wheel');
+  if (!wheel) return;
+  wheel.style.transition = animate ? 'transform 0.55s cubic-bezier(0.22,1,0.36,1)' : 'none';
+  wheel.style.transform  = `rotateY(${wheelRot}deg)`;
+
+  const front = frontIndex();
+  wheel.querySelectorAll('.lb-card').forEach(card => {
+    const i = +card.dataset.idx;
+    let ang = (i * WHEEL_STEP + wheelRot) % 360;
+    if (ang > 180) ang -= 360;
+    if (ang < -180) ang += 360;
+    const a = Math.abs(ang);
+    card.style.opacity   = Math.max(0.16, 1 - a / 115).toFixed(3);
+    card.style.zIndex    = String(Math.round(1000 - a));
+    const isFront = (i === front) && CHARACTERS[i].available;
+    card.classList.toggle('lb-selected', isFront);
+    card.style.transform = cardBaseTransform(i) + (isFront ? ' scale(1.12)' : '');
+  });
+}
+
+// 指定indexを正面へ（最短回りで）
+function rotateToIndex(idx, animate = true) {
+  let target = -idx * WHEEL_STEP;
+  while (target - wheelRot >  180) target -= 360;
+  while (target - wheelRot < -180) target += 360;
+  wheelRot = target;
+  applyWheel(animate);
 }
 
 function selectChar(idx) {
   if (!CHARACTERS[idx].available) return;
   selectedIdx = idx;
-  render();
+  rotateToIndex(idx, true);
+}
+
+// 利用可能なキャラへdir方向(±1)に1つ送る（ラップあり）
+function stepChar(dir) {
+  let i = selectedIdx;
+  for (let k = 0; k < N; k++) {
+    i = ((i + dir) % N + N) % N;
+    if (CHARACTERS[i].available) { selectChar(i); return; }
+  }
 }
 
 function render() {
-  const row = document.getElementById('lb-row');
-  row.innerHTML = '';
-  CHARACTERS.forEach((ch, i) => row.appendChild(buildCard(ch, i)));
+  const wheel = document.getElementById('lb-wheel');
+  wheel.innerHTML = '';
+  CHARACTERS.forEach((ch, i) => wheel.appendChild(buildCard(ch, i)));
+  rotateToIndex(selectedIdx, false);
+}
 
-  const cards = row.querySelectorAll('.lb-card');
-  if (cards[selectedIdx]) {
-    cards[selectedIdx].scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+// ── ドラッグ操作（マウス・タッチ共通）────────────────────────────────
+function initCarousel() {
+  const stage = document.getElementById('lb-stage');
+
+  stage.addEventListener('pointerdown', e => {
+    if (e.target.closest('.lb-nav')) return;
+    drag = { x: e.clientX, rot: wheelRot, moved: false };
+    stage.setPointerCapture?.(e.pointerId);
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (Math.abs(dx) > 4) drag.moved = true;
+    wheelRot = drag.rot + dx * DRAG_SENS;
+    applyWheel(false);
+  });
+  function endDrag() {
+    if (!drag) return;
+    drag = null;
+    // 正面に最も近いカードへスナップ（ロックは隣の利用可能へ寄せる）
+    let idx = frontIndex();
+    if (!CHARACTERS[idx].available) {
+      for (let k = 1; k <= N; k++) {
+        const a = ((idx - k) % N + N) % N, b = (idx + k) % N;
+        if (CHARACTERS[a].available) { idx = a; break; }
+        if (CHARACTERS[b].available) { idx = b; break; }
+      }
+    }
+    selectedIdx = idx;
+    rotateToIndex(idx, true);
   }
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+
+  document.getElementById('lb-prev').addEventListener('click', e => { e.stopPropagation(); stepChar(-1); });
+  document.getElementById('lb-next').addEventListener('click', e => { e.stopPropagation(); stepChar(1); });
 }
 
 // リアル対戦UIをリセット
@@ -254,6 +344,7 @@ function start2v2() {
 
 function init() {
   render();
+  initCarousel();
 
   const fsBtns = ['full', 'medium', 'compact'];
   fsBtns.forEach(size => {
@@ -357,13 +448,9 @@ function init() {
     const lobby = document.getElementById('lobby');
     if (!lobby || lobby.style.display === 'none') return;
     if (e.key === 'ArrowLeft') {
-      let i = selectedIdx - 1;
-      while (i >= 0 && !CHARACTERS[i].available) i--;
-      if (i >= 0) selectChar(i);
+      stepChar(-1);
     } else if (e.key === 'ArrowRight') {
-      let i = selectedIdx + 1;
-      while (i < CHARACTERS.length && !CHARACTERS[i].available) i++;
-      if (i < CHARACTERS.length) selectChar(i);
+      stepChar(1);
     } else if (e.key === 'Enter') {
       kickOff();
     }
