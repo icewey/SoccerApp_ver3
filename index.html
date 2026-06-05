@@ -99,21 +99,42 @@
 
     /* 右：アクションボタン（全て右半分に配置） */
     #btn-spin        { width:60px;height:60px; bottom:240px; right:10px;  background:rgba(255,220,0,0.35); }
-    #btn-kick        { width:64px;height:64px; bottom:165px; right:90px;  background:rgba(255,80,80,0.3); }
-    #btn-loft        { width:64px;height:64px; bottom:165px; right:15px;  background:rgba(255,140,0,0.3); }
-    #btn-curve-left  { width:60px;height:60px; bottom:90px;  right:90px;  background:rgba(140,80,255,0.3); }
-    #btn-curve-right { width:60px;height:60px; bottom:90px;  right:15px;  background:rgba(80,200,255,0.3); }
-    #btn-tackle      { width:72px;height:72px; bottom:120px; right:45px;  background:rgba(255,60,60,0.45); }
+    #btn-straight    { width:72px;height:72px; bottom:160px; right:90px;  background:rgba(255,80,80,0.32); }
+    #btn-curve       { width:72px;height:72px; bottom:160px; right:10px;  background:rgba(80,200,255,0.32); }
+    #btn-tackle      { width:72px;height:72px; bottom:78px;  right:50px;  background:rgba(255,60,60,0.45); }
+    #btn-straight, #btn-curve, #btn-tackle, #btn-spin { font-size:0.72rem; text-align:center; line-height:1.1; }
 
     /* ── 横持ち: ボタンをコンパクトに再配置 ── */
     @media (orientation: landscape) and (pointer: coarse) {
       #touch-controls  { height: 190px; }
       #btn-spin        { width:50px;height:50px; bottom:128px; right:10px; }
-      #btn-kick        { width:54px;height:54px; bottom:68px;  right:92px; }
-      #btn-loft        { width:54px;height:54px; bottom:68px;  right:10px; }
-      #btn-curve-left  { width:50px;height:50px; bottom:10px;  right:92px; }
-      #btn-curve-right { width:50px;height:50px; bottom:10px;  right:10px; }
-      #btn-tackle      { width:58px;height:58px; bottom:68px;  right:162px; }
+      #btn-straight    { width:60px;height:60px; bottom:66px;  right:88px; }
+      #btn-curve       { width:60px;height:60px; bottom:66px;  right:14px; }
+      #btn-tackle      { width:58px;height:58px; bottom:66px;  right:160px; }
+    }
+
+    /* シュートのチャージバー（画面下中央） */
+    #charge-bar {
+      display: none;
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%);
+      width: min(46vw, 320px);
+      height: 16px;
+      background: rgba(0,0,0,0.45);
+      border: 2px solid rgba(255,255,255,0.65);
+      border-radius: 10px;
+      overflow: hidden;
+      z-index: 50;
+      pointer-events: none;
+    }
+    #charge-fill {
+      width: 0%;
+      height: 100%;
+      background: hsl(10, 95%, 55%);
+      border-radius: 8px 0 0 8px;
+      transition: width 40ms linear;
     }
 
     /* プニコン */
@@ -816,10 +837,8 @@
     <span>D / → : 右移動</span>
     <span>Q : 左回転</span>
     <span>E : 右回転</span>
-    <span>F : キック（低）</span>
-    <span>G : キック（ロフト）</span>
-    <span>H : カーブ左</span>
-    <span>J : カーブ右</span>
+    <span>F : ストレート（長押しでチャージ→離して発射）</span>
+    <span>H : カーブ（長押しでチャージ→離して発射）</span>
     <span>T : タックル（ボールなし時）</span>
     <span>Z : スピン（ドリブル時）</span>
   </div>
@@ -832,12 +851,13 @@
   <!-- タッチ操作ボタン（右側のみ） -->
   <div id="touch-controls">
     <div class="touch-btn" id="btn-spin">スピン</div>
-    <div class="touch-btn" id="btn-kick">低</div>
-    <div class="touch-btn" id="btn-loft">高</div>
-    <div class="touch-btn" id="btn-curve-left">↖曲</div>
-    <div class="touch-btn" id="btn-curve-right">曲↗</div>
+    <div class="touch-btn" id="btn-straight">ストレート</div>
+    <div class="touch-btn" id="btn-curve">カーブ</div>
     <div class="touch-btn" id="btn-tackle">タックル</div>
   </div>
+
+  <!-- シュートのチャージバー -->
+  <div id="charge-bar"><div id="charge-fill"></div></div>
 
   <script type="importmap">
   {

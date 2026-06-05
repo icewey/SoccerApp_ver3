@@ -208,7 +208,8 @@ const LOOK_SENSITIVITY = 0.003; // rad/px
 // カメラ視点角（Q/E/スワイプで制御。プレイヤー体の向きとは独立）
 let viewAngle = 0;
 
-// curve: 0=直線, -1=左カーブ, 1=右カーブ / power: 1.0=通常, 1.5=フル
+// curve: 0=直線 / +1=右利き(右へ蹴り出し左へ曲がる) / -1=左利き(左右反転)
+// power: チャージ量から決まる威力。大きいほど初速・飛距離・浮きが伸びる。
 function kickBall(lofted = false, curve = 0, power = 1.0) {
   const toBall = new THREE.Vector3().subVectors(ballMesh.position, player.position);
   toBall.y = 0;
@@ -218,16 +219,17 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
   const isCurve = curve !== 0;
 
   if (isCurve) {
-    // カーブキック: 向きを横にずらして蹴り上げ、空中でバナナ軌道
+    // カーブキック: 蹴り出しを foot 側へ振り、空中で逆へ曲げるバナナ軌道。
+    // curve=+1(右利き): 右へ蹴り出し → 左へ曲がる。-1(左利き)で左右反転。
     const kickAngle = player.rotation.y - curve * (Math.PI / 8);
     ballVel.x = -Math.sin(kickAngle) * 13 * pwr;
-    ballVel.y = 14;
     ballVel.z = -Math.cos(kickAngle) * 13 * pwr;
-    ballCurveRate = curve * 0.9;
+    ballVel.y = 11 + 4 * pwr;       // チャージで浮きと飛距離アップ
+    ballCurveRate = curve * (0.7 + 0.45 * pwr);
   } else {
     const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
     ballVel.copy(facing).multiplyScalar((lofted ? 14 : 15) * pwr);
-    ballVel.y = lofted ? 16 : 3;
+    ballVel.y = lofted ? (13 + 4 * pwr) : (2 + 2.5 * pwr); // チャージで僅かに浮かせて伸ばす
     ballCurveRate = 0;
   }
   ballSpin.set(0, 0, 0);
@@ -243,6 +245,7 @@ function endSpin() { isSpinning = false; spinTimer = 0; }
 
 function startSpin() {
   if (!gameStarted || !isDribbling || isSpinning || !clips['spin'] || !mixer) return;
+  if (playerStunTimer > 0) return; // スタン中は操作不可
   isSpinning = true;
   spinTimer  = clips['spin'].duration; // 保険のタイマー
   fadeToClip('spin', false);
@@ -250,6 +253,7 @@ function startSpin() {
 
 function startKick(lofted, curve, power) {
   if (!gameStarted || !clips['kick'] || !mixer) return;
+  if (playerStunTimer > 0) return; // スタン中は操作不可
   endSpin();              // スピン中のシュートはスピンを打ち切ってから蹴る（状態固着防止）
   isKicking = true;
   kickTimer = clips['kick'].duration + 0.1; // finished取りこぼし時の保険
@@ -257,10 +261,62 @@ function startKick(lofted, curve, power) {
   setTimeout(() => kickBall(lofted, curve, power), clips['kick'].duration * 0.55 * 1000);
 }
 
+// ── シュートのチャージ（ボタン押下中に威力を溜める）────────────────────────
+// 利き足: +1=右利き（カーブは右へ蹴り出し左へ曲がる）。左利きキャラは -1。
+let playerFootSign = 1;
+let charging   = false;
+let chargeKind = null;  // 'straight' | 'curve'
+let chargeT    = 0;     // 0..1 チャージ量
+const CHARGE_TIME      = 0.85; // 秒でフルチャージ
+const CHARGE_MIN_POWER = 0.65; // 最小威力（タップ＝即離し）
+const CHARGE_MAX_POWER = 1.95; // 最大威力（フルチャージ）
+
+function startCharge(kind) {
+  if (!gameStarted || isGoalScene || ballOwner !== 'player') return;
+  if (isKicking || isPassing || isTackling || playerStunTimer > 0) return;
+  if (charging) return;
+  charging = true; chargeKind = kind; chargeT = 0;
+}
+
+function releaseCharge() {
+  if (!charging) return;
+  const kind = chargeKind, t = chargeT;
+  charging = false; chargeKind = null; chargeT = 0;
+  const power = CHARGE_MIN_POWER + (CHARGE_MAX_POWER - CHARGE_MIN_POWER) * t;
+  if (kind === 'curve') startKick(false, playerFootSign, power);
+  else                  startKick(false, 0, power);
+}
+
+function cancelCharge() { charging = false; chargeKind = null; chargeT = 0; }
+
+let _chargeBarEl = null, _chargeFillEl = null;
+function updateCharge(dt) {
+  // ボールを失う/シーン切替で中断
+  if (charging && (ballOwner !== 'player' || isGoalScene || !gameStarted)) cancelCharge();
+  if (charging) chargeT = Math.min(1, chargeT + dt / CHARGE_TIME);
+
+  if (_chargeBarEl === null) {
+    _chargeBarEl  = document.getElementById('charge-bar');
+    _chargeFillEl = document.getElementById('charge-fill');
+  }
+  if (_chargeBarEl) {
+    _chargeBarEl.style.display = charging ? 'block' : 'none';
+    if (charging && _chargeFillEl) {
+      _chargeFillEl.style.width = `${Math.round(chargeT * 100)}%`;
+      // 溜まるほど赤→黄へ。フルでほんのり光らせる
+      const hue = 10 + chargeT * 45; // 10(赤)〜55(黄)
+      _chargeFillEl.style.background = `hsl(${hue}, 95%, 55%)`;
+    }
+  }
+}
+
 function startTackle() {
   if (!gameStarted || ballOwner === 'player' || isTackling || !clips['tackle'] || !mixer) return;
+  if (playerStunTimer > 0) return; // スタン中は操作不可
   isTackling  = true;
-  tackleTimer = TACKLE_LOCK; // 短い前進ランジ。タイマーで必ず解除しclip中断による固着を防ぐ
+  // モーションは最後まで再生する（タイマーはclip全長＝finished取りこぼし時の保険）。
+  tackleTimer = clips['tackle'].duration + 0.1;
+  tackleLungeTimer = TACKLE_LOCK; // 前進ランジ（移動）だけは短く切り上げて飛びすぎを防ぐ
   fadeToClip('tackle', false);
 }
 
@@ -354,16 +410,31 @@ function updateEnemy(dt) {
   if (!hasEnemy || !gameStarted || !enemyChar.animState?.mixer || isGoalScene) return;
   enemyChar.animState.mixer.update(dt);
 
+  // スタン（奪われた直後の硬直）中はAIを止めてその場で待機
+  if (enemyStunTimer > 0) {
+    enemyStunTimer -= dt;
+    charAnim(enemyChar, 'idle');
+    charClampToField(enemyChar);
+    return;
+  }
+
   if (enemyTackleCooldown > 0) enemyTackleCooldown -= dt;
+  // タックルモーションは最後まで再生する（finished取りこぼし時の保険タイマー）
+  if (enemyTackleTimer > 0) {
+    enemyTackleTimer -= dt;
+    if (enemyTackleTimer <= 0) enemyTackling = false;
+  }
 
   const distToBall = new THREE.Vector3().subVectors(ballMesh.position, enemy.position).setY(0).length();
 
   // タックルによる奪取（プレイヤーと同じ TACKLE_DIST を使用）
   if (enemyTackling && ballOwner !== 'enemy' && distToBall < TACKLE_DIST
       && enemyPickupCooldown <= 0 && !isKicking && gkBallHolder === 'none') {
+    const stolen = ballOwner === 'player';
     ballOwner = 'enemy';
     playerPickupCooldown = 0.6;
-    enemyTackling = false;
+    // 奪った瞬間に enemyTackling を折らず、タックルモーションは最後まで流す。
+    if (stolen) applyStealStun('player'); // 奪われたプレイヤーを硬直＋‼️
   }
 
   // 状態遷移
@@ -387,6 +458,7 @@ function updateEnemy(dt) {
         && enemyTackleCooldown <= 0) {
       enemyTackling = true;
       enemyTackleCooldown = ENEMY_TACKLE_COOLDOWN;
+      enemyTackleTimer = clips['tackle'] ? clips['tackle'].duration + 0.1 : 1.0;
       charAnim(enemyChar, 'tackle', false);
     }
   }
@@ -456,7 +528,8 @@ function updateLocalPlayerBall(dt) {
       && playerPickupCooldown <= 0) {
     ballOwner = 'player';
     playerPickupCooldown = 0;
-    isTackling = false;
+    // マルチでは相手の硬直はローカルで再現できないため‼️は出さず、
+    // タックルモーションだけ最後まで再生する（isTackling を折らない）。
   }
 
   // 通常拾得: 相手が持っていない時のみ
@@ -508,9 +581,11 @@ function updateBall(dt) {
     const TACKLE_DIST = 1.6;
     if (isTackling && ballOwner !== 'player' && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0
         && !(ballOwner === 'enemy' && enemyKicking)) {
+      const stolen = ballOwner === 'enemy';
       ballOwner = 'player';
       enemyPickupCooldown = 0.5;
-      isTackling = false;
+      // isTackling は折らない＝タックルモーションを最後まで再生する。
+      if (stolen) applyStealStun('enemy'); // 奪われた敵を硬直＋‼️
     }
   } else {
     // マルチ: プレイヤー操作は updateLocalPlayerBall() が担当（二重処理防止）
@@ -606,12 +681,9 @@ window.addEventListener('keydown', e => {
 
   // ワンショット動作はkeydownで即トリガー（animate()ループを待たない）
   if (gameStarted && !e.repeat) {
-    if (e.code === 'KeyF' || e.code === 'KeyG') {
-      startKick(e.code === 'KeyG', 0, 1.0);
-    }
-    if (e.code === 'KeyH' || e.code === 'KeyJ') {
-      startKick(false, e.code === 'KeyH' ? -1 : 1, 1.0);
-    }
+    // シュート: 押し続けてチャージ、離して発射（F=ストレート / H=カーブ）
+    if (e.code === 'KeyF') startCharge('straight');
+    if (e.code === 'KeyH') startCharge('curve');
     if (e.code === 'KeyT') {
       startTackle(); // タックル（ボール非所持時のみ・内部でガード）
     }
@@ -624,6 +696,9 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => {
   if (e.isComposing) return;
   keys.delete(e.code);
+  // チャージ中のシュートキーを離したら発射
+  if (e.code === 'KeyF' && chargeKind === 'straight') releaseCharge();
+  if (e.code === 'KeyH' && chargeKind === 'curve')    releaseCharge();
 }, { capture: true });
 
 // ── Character & Animations ────────────────────────────────────────────────
@@ -639,8 +714,13 @@ let isPassing   = false;
 let isTackling  = false;
 let isSpinning  = false;
 let spinTimer   = 0; // スピン残り時間（finishedイベント取りこぼし対策の保険）
-let tackleTimer = 0; // タックル残り時間（同上。割り込みで操作不能になるのを防ぐ）
+let tackleTimer = 0; // タックルモーション残り時間（clip全長。最後まで再生するための保険）
 let kickTimer   = 0; // キック残り時間（同上の保険）
+let tackleLungeTimer = 0; // タックルの前進ランジ時間（モーション全長より短い。移動だけ早く止める）
+// 奪われた側の硬直（スタン）残り時間。>0 の間は操作/AIを止め、頭上に‼️を出す。
+let playerStunTimer  = 0;
+let enemyStunTimer   = 0;
+let enemyTackleTimer = 0; // 敵タックルモーション残り時間（finished取りこぼし時の保険）
 let groundY     = 0;
 let playerScore = 0;
 let cpuScore    = 0;
@@ -802,7 +882,24 @@ function updateGK(gkChar, gkSt, myGoalX, teammateChar, ownerKey, dt) {
 
   // ── ボール保持中 ──────────────────────────────────────────────────
   if (gkSt.state === 'hold') {
-    ballMesh.position.set(gkPos.x, gkPos.y + 1.2, gkPos.z);
+    // 手のボーンの位置にボールを追従させ、キャッチ/ダイブのポーズに合わせて
+    // 「手で抱えている」見た目にする。ボーンが取れない場合は足元基準の
+    // 固定高さ（腕の高さ）にフォールバックする。
+    const hands = gkChar.handBones;
+    if (hands && hands.length > 0) {
+      const handPos = new THREE.Vector3();
+      const tmp     = new THREE.Vector3();
+      hands.forEach(b => { b.getWorldPosition(tmp); handPos.add(tmp); });
+      handPos.divideScalar(hands.length); // 両手の中点
+      handPos.y += 0.15;                  // 手のひらに乗せるよう少し上へ
+      ballMesh.position.copy(handPos);
+    } else {
+      const gkOffset = gkChar.group.userData.gkGroundOffset ?? 0;
+      const feetY    = gkPos.y - gkOffset;        // 足元の世界Y（≒0）
+      const ry       = gkChar.group.rotation.y;
+      const fwd      = new THREE.Vector3(-Math.sin(ry), 0, -Math.cos(ry));
+      ballMesh.position.set(gkPos.x + fwd.x * 0.30, feetY + 1.05, gkPos.z + fwd.z * 0.30);
+    }
     ballVel.set(0, 0, 0);
     ballCurveRate = 0;
     // キャッチ/ダイブのアニメを最後まで再生してから idle に切り替える
@@ -942,6 +1039,8 @@ function mpResetAfterGoal() {
 
   isDribbling = isKicking = isPassing = isTackling = isSpinning = false;
   spinTimer = tackleTimer = kickTimer = 0;
+  tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
+  clearStunMarks();
   playerPickupCooldown = 0;
   if (mixer)           { mixer.stopAllAction(); current = null; }
   if (remotePeerMixer) { remotePeerMixer.stopAllAction(); remotePeerClipAct = {}; }
@@ -959,6 +1058,8 @@ function resetAfterGoal(scorer) {
   isDribbling  = false;
   isKicking = isPassing = isTackling = isSpinning = false;
   spinTimer = tackleTimer = kickTimer = 0;
+  tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
+  clearStunMarks();
   playerPickupCooldown = 0;
 
   pGKSt.state = 'patrol'; pGKSt.holdTimer = 0; pGKSt.patrolPhase = 0;
@@ -1067,6 +1168,8 @@ function pkPlaceForKick() {
   gkBallHolder = 'none';
   isKicking = isPassing = isTackling = isSpinning = false;
   spinTimer = tackleTimer = kickTimer = 0;
+  tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
+  clearStunMarks();
   playerPickupCooldown = 0;
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.catchAnimTimer = 0;
   if (enemyGKMixer) {
@@ -1287,6 +1390,9 @@ function onCoreLoaded() {
 
 // ゲーム開始（lobby.jsからimportされる）
 export function startGame(config) {
+  // 利き足: 左利きキャラ作成時は config.leftFooted=true でカーブの左右を反転
+  playerFootSign = config.leftFooted ? -1 : 1;
+  cancelCharge();
   // ── 前ゲームの残骸を全てクリア ────────────────────────────────────
   // player の旧キャラ削除
   while (player.children.length > 0) player.remove(player.children[0]);
@@ -1504,8 +1610,14 @@ export function startGame(config) {
                 ? c.material.map(m => { const mc = m.clone(); mc.color.set(tintColor); return mc; })
                 : (() => { const mc = c.material.clone(); mc.color.set(tintColor); return mc; })();
             } else {
+              // 味方GK: モデル本来のデフォルト色で表示する。テクスチャがある場合は
+              // 埋め込みの色味（赤などの着色）でテクスチャが乗算されて濁らないよう
+              // ベースカラーを白に正規化し、sRGBで素のテクスチャを出す。
               const mats = Array.isArray(c.material) ? c.material : [c.material];
-              mats.forEach(m => { if (m.map) m.map.colorSpace = THREE.SRGBColorSpace; });
+              mats.forEach(m => {
+                if (m.map) { m.map.colorSpace = THREE.SRGBColorSpace; m.color?.set(0xffffff); }
+                if (m.emissive) m.emissive.set(0x000000);
+              });
             }
           }
         });
@@ -1514,6 +1626,16 @@ export function startGame(config) {
         const gkBox = new THREE.Box3().setFromObject(fbx);
         gkGroup.userData.gkGroundOffset =
           (isFinite(gkBox.min.y) && gkBox.min.y < -0.01) ? -gkBox.min.y : 0;
+        // 捕球保持中にボールを手の位置へ追従させるため、手のボーンを拾っておく
+        // （Mixamoスケルトン: mixamorigLeftHand / mixamorigRightHand）。指ボーンは除外。
+        const handBones = [];
+        fbx.traverse(o => {
+          if (o.isBone && /hand/i.test(o.name)
+              && !/(thumb|index|middle|ring|pinky|pink|end)/i.test(o.name)) {
+            handBones.push(o);
+          }
+        });
+        gkChar.handBones = handBones;
         const newMixer = new THREE.AnimationMixer(fbx);
         gkAnimProxy.mixer = newMixer;
         gkChar.animState  = gkAnimProxy;
@@ -1566,6 +1688,12 @@ let GOAL_X       = 52.5;
 let GOAL_HALF_Z  = 3.66;
 
 const smoothCamTarget = new THREE.Vector3(0, 1, 0);
+// リードアヘッド: 移動中は進行方向の前方を画面中心に寄せる
+const camLead       = new THREE.Vector3();   // 現在のリードオフセット（ワールド・スムーズ済み）
+const _prevPlayerPos = new THREE.Vector3();  // 前フレームのプレイヤー位置（移動方向の算出用）
+let _prevPlayerPosInit = false;
+const LEAD_DIST     = 5;    // 前方何メートルを中心にするか
+const LEAD_MIN_MOVE = 0.01; // この移動量(/frame)未満は停止扱い→中心をプレイヤーへ戻す
 
 function getDesiredAnim() {
   if (isKicking || isPassing || isTackling) return null;
@@ -1582,6 +1710,67 @@ function getDesiredAnim() {
   return 'idle';
 }
 
+
+// ── ‼️ スタンマーク（ボールを奪われた側の頭上に出す）────────────────────────
+const stunMarks = [];
+function makeStunTexture() {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d');
+  ctx.font = 'bold 104px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('‼️', 64, 74);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const _stunTexture = makeStunTexture(); // 全マーク共通（使い回す）
+
+function spawnStunMark(targetGroup, duration) {
+  const mat = new THREE.SpriteMaterial({ map: _stunTexture, transparent: true, depthTest: false });
+  const sp  = new THREE.Sprite(mat);
+  sp.scale.set(1.1, 1.1, 1.1);
+  sp.renderOrder = 999;
+  scene.add(sp);
+  stunMarks.push({ sprite: sp, target: targetGroup, life: 0, maxLife: duration });
+}
+
+function updateStunMarks(dt) {
+  for (let i = stunMarks.length - 1; i >= 0; i--) {
+    const m = stunMarks[i];
+    m.life += dt;
+    const t = m.life / m.maxLife;
+    // 頭上に追従＋少し弾むように上下
+    m.sprite.position.set(
+      m.target.position.x,
+      m.target.position.y + 2.4 + Math.sin(t * Math.PI * 3) * 0.08,
+      m.target.position.z
+    );
+    m.sprite.material.opacity = t > 0.75 ? (1 - (t - 0.75) / 0.25) : 1; // 終盤フェードアウト
+    if (m.life >= m.maxLife) {
+      scene.remove(m.sprite); m.sprite.material.dispose();
+      stunMarks.splice(i, 1);
+    }
+  }
+}
+
+function clearStunMarks() {
+  for (const m of stunMarks) { scene.remove(m.sprite); m.sprite.material.dispose(); }
+  stunMarks.length = 0;
+}
+
+// 奪われた側にスタン＋‼️を付与。who: 'player' | 'enemy'
+const STUN_TIME = 0.6; // ほんの少しフリーズ
+function applyStealStun(who) {
+  if (who === 'enemy' && hasEnemy) {
+    enemyStunTimer = STUN_TIME;
+    spawnStunMark(enemy, STUN_TIME);
+  } else if (who === 'player') {
+    playerStunTimer = STUN_TIME;
+    spawnStunMark(player, STUN_TIME);
+  }
+}
 
 // ── スピンエフェクト ──────────────────────────────────────────────────────────
 const spinParticles = [];
@@ -1644,6 +1833,50 @@ function updateSpinEffects(dt) {
     if (g.life >= g.maxLife) {
       scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose();
       spinGhosts.splice(i, 1);
+    }
+  }
+}
+
+// ── シュート時の青い軌道トレイル（残像）──────────────────────────────────
+// 強く蹴られて誰も保持していないボールが速く飛ぶ間だけ、青く光る残像を
+// 連続生成してフェードアウトさせる。間隔を詰めて球を重ね、ひと筋の軌跡に見せる。
+const ballTrail = [];
+let _ballTrailTimer = 0;
+const TRAIL_SPEED_THR = 9;     // この水平＋垂直合成速度以上で軌道を引く（シュート/ロングパス）
+const TRAIL_INTERVAL  = 0.014; // 残像の生成間隔（秒）。短いほど密で連続的な筋になる
+const TRAIL_MAX_LIFE  = 0.32;  // 残像1個の寿命（秒）
+const TRAIL_OPACITY   = 0.55;
+
+function spawnBallTrail() {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(BALL_R * 1.15, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0x3da5ff, transparent: true, opacity: TRAIL_OPACITY,
+      blending: THREE.AdditiveBlending, depthWrite: false
+    })
+  );
+  mesh.position.copy(ballMesh.position);
+  scene.add(mesh);
+  ballTrail.push({ mesh, life: 0, maxLife: TRAIL_MAX_LIFE });
+}
+
+function updateBallTrail(dt) {
+  const speed = ballVel.length();
+  if (ballOwner === 'none' && speed > TRAIL_SPEED_THR && !isGoalScene) {
+    _ballTrailTimer += dt;
+    if (_ballTrailTimer >= TRAIL_INTERVAL) { _ballTrailTimer = 0; spawnBallTrail(); }
+  } else {
+    _ballTrailTimer = TRAIL_INTERVAL; // 次に速くなった瞬間から残像を出せるようにしておく
+  }
+  for (let i = ballTrail.length - 1; i >= 0; i--) {
+    const g = ballTrail[i];
+    g.life += dt;
+    const t = g.life / g.maxLife;
+    g.mesh.material.opacity = TRAIL_OPACITY * (1 - t);
+    g.mesh.scale.setScalar(1 - t * 0.55);
+    if (g.life >= g.maxLife) {
+      scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose();
+      ballTrail.splice(i, 1);
     }
   }
 }
@@ -1735,13 +1968,18 @@ function animate() {
   }
 
   updateSpinEffects(dt);
+  updateBallTrail(dt);
+  updateStunMarks(dt);
+  updateCharge(dt);
 
   if (gameStarted) {
   if (!isGoalScene) {
-    const anim = getDesiredAnim();
+    if (playerStunTimer > 0) playerStunTimer -= dt;
+    // スタン中は入力に関わらず idle 固定（足踏み防止）
+    const anim = playerStunTimer > 0 ? 'idle' : getDesiredAnim();
     if (anim) fadeToClip(anim);
 
-    if (!isKicking && !isPassing && !isTackling && !isSpinning) {
+    if (playerStunTimer <= 0 && !isKicking && !isPassing && !isTackling && !isSpinning) {
       // 視線回転: Q/E キー
       if (keys.has('KeyQ')) viewAngle += TURN_SPEED * dt;
       if (keys.has('KeyE')) viewAngle -= TURN_SPEED * dt;
@@ -1799,7 +2037,8 @@ function animate() {
       if (spinTimer <= 0 || ballOwner !== 'player') endSpin();
     }
     if (isTackling) {
-      tackleTimer -= dt;
+      tackleTimer      -= dt;
+      tackleLungeTimer -= dt;
       if (tackleTimer <= 0) isTackling = false;
     }
     if (isKicking) {
@@ -1807,10 +2046,11 @@ function animate() {
       if (kickTimer <= 0) isKicking = false;
     }
 
-    // タックル/スピン中は向いてる方向に自動前進
-    if (isTackling || isSpinning) {
+    // タックルの前進ランジ（短時間だけ）／スピン中の自動前進
+    const tackleLunging = isTackling && tackleLungeTimer > 0;
+    if (tackleLunging || isSpinning) {
       const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
-      const speed  = isTackling ? MOVE_SPEED * 1.3 : MOVE_SPEED;
+      const speed  = tackleLunging ? MOVE_SPEED * 1.3 : MOVE_SPEED;
       player.position.addScaledVector(facing, speed * dt);
       player.position.y = groundY; // 浮き防止
       charClampToField(playerChar);
@@ -1827,12 +2067,23 @@ function animate() {
     _prevSpinning = isSpinning;
   } // end !isGoalScene
 
+    // リードアヘッド: 実際の移動量から進行方向を求め、移動中は前方 LEAD_DIST m を
+    // 画面中心に寄せる。停止時は 0 に戻してプレイヤーを中心にする。
+    if (!_prevPlayerPosInit) { _prevPlayerPos.copy(player.position); _prevPlayerPosInit = true; }
+    const frameMove = new THREE.Vector3().subVectors(player.position, _prevPlayerPos).setY(0);
+    const desiredLead = new THREE.Vector3();
+    if (frameMove.length() > LEAD_MIN_MOVE) {
+      desiredLead.copy(frameMove).normalize().multiplyScalar(LEAD_DIST);
+    }
+    camLead.lerp(desiredLead, Math.min(1, 6 * dt)); // 進行方向へ素早く寄せる/戻す
+    _prevPlayerPos.copy(player.position);
+
     // カメラ追従: ターゲット位置をスムーズに追い、そこから固定オフセット分で配置
     // （位置を直接 lerp するとカメラがプレイヤーに近づくズームが起きるため避ける）
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, viewAngle, 0));
     const camOffset   = new THREE.Vector3(0, 8, 16).applyQuaternion(q);
-    const idealTarget = player.position.clone().add(new THREE.Vector3(0, 1.2, 0));
-    const t = Math.min(1, 7 * dt);
+    const idealTarget = player.position.clone().add(new THREE.Vector3(0, 1.2, 0)).add(camLead);
+    const t = Math.min(1, 9 * dt);
     smoothCamTarget.lerp(idealTarget, t);
     camera.position.copy(smoothCamTarget).add(camOffset);
     camera.lookAt(smoothCamTarget);
@@ -1931,23 +2182,20 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
 // ▼ アクションボタン（右半分）
 (function setupActionBtns() {
 
-  // キックボタン（ジョイスティック傾き量でpower決定: 弱押し=弱シュート, フル=強シュート）
-  function setupKickBtn(id, lofted, curve) {
+  // シュートボタン: 押している間チャージ → 離して発射（威力はチャージ量で決定）
+  function setupChargeBtn(id, kind) {
     const el = document.getElementById(id);
     if (!el) return;
-    el.addEventListener('touchstart', e => {
+    el.addEventListener('touchstart', e => { e.preventDefault(); startCharge(kind); }, { passive: false });
+    const fire = e => {
       e.preventDefault();
-      const joyMag = joystick.active
-        ? Math.min(1, Math.sqrt(joystick.dx ** 2 + joystick.dy ** 2))
-        : 1.0;
-      const power = 0.6 + 0.9 * joyMag; // 0.6(最弱)〜1.5(最強)
-      startKick(lofted, curve, power);
-    }, { passive: false });
+      if (chargeKind === kind) releaseCharge();
+    };
+    el.addEventListener('touchend',    fire, { passive: false });
+    el.addEventListener('touchcancel', fire, { passive: false });
   }
-  setupKickBtn('btn-kick',        false,  0);
-  setupKickBtn('btn-loft',        true,   0);
-  setupKickBtn('btn-curve-left',  false, -1);
-  setupKickBtn('btn-curve-right', false,  1);
+  setupChargeBtn('btn-straight', 'straight');
+  setupChargeBtn('btn-curve',    'curve');
 
   // タックルボタン（ボール非所持時のみ有効）
   const tackleBtn = document.getElementById('btn-tackle');
@@ -1970,7 +2218,7 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
   // ボール所持状態に応じてボタン表示切替
   function updateMobileButtons() {
     const hasBall = ballOwner === 'player';
-    ['btn-kick', 'btn-loft', 'btn-curve-left', 'btn-curve-right'].forEach(id => {
+    ['btn-straight', 'btn-curve'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = hasBall ? '' : 'none';
     });
