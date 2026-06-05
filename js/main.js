@@ -366,8 +366,9 @@ function startPass() {
   if (playerStunTimer > 0 || !clips['pass'] || !mixer) return;
   endSpin();
   isPassing = true;
-  fadeToClip('pass', false);
   const dur = clips['pass'].duration;
+  passTimer = dur + 0.15; // 保険: finished取りこぼし時もこの時間で必ず解除
+  fadeToClip('pass', false);
   const sess = skillSession;
   setTimeout(() => { if (sess === skillSession && ballOwner === 'player') doPass('player'); },
     dur * 0.35 * 1000);
@@ -976,6 +977,7 @@ let isSpinning  = false;
 let spinTimer   = 0; // スピン残り時間（finishedイベント取りこぼし対策の保険）
 let tackleTimer = 0; // タックルモーション残り時間（clip全長。最後まで再生するための保険）
 let kickTimer   = 0; // キック残り時間（同上の保険）
+let passTimer   = 0; // パスモーション残り時間（finished取りこぼしで固着＝永久フリーズ防止の保険）
 let tackleLungeTimer = 0; // タックルの前進ランジ時間（モーション全長より短い。移動だけ早く止める）
 // 奪われた側の硬直（スタン）残り時間。>0 の間は操作/AIを止め、頭上に‼️を出す。
 let playerStunTimer  = 0;
@@ -1402,7 +1404,7 @@ function resetAfterGoal(scorer) {
   gkBallHolder = 'none';
   isDribbling  = false;
   isKicking = isPassing = isTackling = isSpinning = false;
-  spinTimer = tackleTimer = kickTimer = 0;
+  spinTimer = tackleTimer = kickTimer = passTimer = 0;
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
@@ -1546,7 +1548,7 @@ function pkPlaceForKick() {
   ballOwner = 'player'; isDribbling = true;
   gkBallHolder = 'none';
   isKicking = isPassing = isTackling = isSpinning = false;
-  spinTimer = tackleTimer = kickTimer = 0;
+  spinTimer = tackleTimer = kickTimer = passTimer = 0;
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
@@ -1825,7 +1827,7 @@ export function startGame(config) {
     c.stun = 0; c.tackling = false; c.kicking = false; c.passing = false;
     c.tackleCd = 0; c.pickupCd = 0; c.passCd = 0; c.oneShotTimer = 0;
   }
-  playerStunTimer = 0; isPassing = false;
+  playerStunTimer = 0; isPassing = false; passTimer = 0;
   // GK の旧キャラ削除（scene から除去せず children だけクリア）
   while (playerGKGroup.children.length > 0) playerGKGroup.remove(playerGKGroup.children[0]);
   playerGKGroup.visible = false;
@@ -2944,9 +2946,18 @@ function animate() {
 
       charClampToField(playerChar);
 
-      // viewAngle をプレイヤーの向きへゆっくり遅延追従
+      // 視点の遅延追従。移動中はプレイヤーの向き（=進行方向）に追従。
+      // 2vs2で静止時はオフェンス/ディフェンスでデフォルト向きを変える:
+      //   オフェンス(自チーム保持)=敵ゴール(+X, viewAngle=-π/2)
+      //   ディフェンス            =自ゴール(-X, viewAngle=+π/2)
       if (!keys.has('KeyQ') && !keys.has('KeyE') && !lookSwipe.active) {
-        let camDiff = player.rotation.y - viewAngle;
+        const isMoving = moveVec.lengthSq() > 0.001;
+        let targetAng = player.rotation.y;
+        if (mode2v2 && !isMoving) {
+          const offense = (ballOwner === 'player' || ballOwner === 'ally');
+          targetAng = offense ? -Math.PI / 2 : Math.PI / 2;
+        }
+        let camDiff = targetAng - viewAngle;
         while (camDiff >  Math.PI) camDiff -= 2 * Math.PI;
         while (camDiff < -Math.PI) camDiff += 2 * Math.PI;
         viewAngle += camDiff * Math.min(1, 1.5 * dt); // ゆっくり追従（約1〜2秒で追いつく）
@@ -2968,6 +2979,12 @@ function animate() {
     if (isKicking) {
       kickTimer -= dt;
       if (kickTimer <= 0) isKicking = false;
+    }
+    if (isPassing) {
+      // スタンでパスclipが中断され finished を取りこぼすと固着＝永久フリーズになるため
+      // 時間で必ず解除する。スタン中はパスを即キャンセル（受け手フリーズ等で動けなくする）。
+      passTimer -= dt;
+      if (passTimer <= 0 || playerStunTimer > 0) isPassing = false;
     }
 
     // タックルの前進ランジ（短時間だけ）／スピン中の自動前進
