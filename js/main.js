@@ -2233,7 +2233,8 @@ function updateCharFx(dt) {
     if (chigiriBoostTimer > 0) {
       _ghostTimer += dt;
       if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xff3399); }
-    } else if (bachiraSkillTimer > 0) {
+    } else if (bachiraSkillTimer > 0 && (bachiraSkillTotal - bachiraSkillTimer) >= bachiraDashStart) {
+      // 残像は motion2（急加速）からのみ。motion1（その場フェイント）では出さない。
       _ghostTimer += dt;
       if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xffd400); }
     }
