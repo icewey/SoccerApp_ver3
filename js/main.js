@@ -262,15 +262,22 @@ function startSpin() {
   fadeToClip('spin', false);
 }
 
+// キックを少し速く再生してラグを減らしつつ、発射は足がボールに当たる接触フレーム
+// （実測 kick.fbx で約0.5）に同期させる。これで「飛び出しが早い/遅い」のズレを解消。
+const KICK_SPEED   = 1.4; // キックアニメの再生倍率（大きいほどキビキビ＝ラグ減）
+const KICK_CONTACT = 0.5; // クリップ内の足接触フレーム（0..1）
 function startKick(lofted, curve, power) {
   if (!gameStarted || !clips['kick'] || !mixer) return;
   if (playerStunTimer > 0) return; // スタン中は操作不可
   endSpin();              // スピン中のシュートはスピンを打ち切ってから蹴る（状態固着防止）
   isKicking = true;
-  kickTimer = clips['kick'].duration + 0.1; // finished取りこぼし時の保険
+  const dur = clips['kick'].duration;
+  kickTimer = dur / KICK_SPEED + 0.1; // 再生が速くなる分ロックも短く（保険）
   fadeToClip('kick', false);
-  // 蹴ってからボールが飛ぶまでのラグを短縮（足が振り出す辺り＝0.3で発射）。
-  setTimeout(() => kickBall(lofted, curve, power), clips['kick'].duration * 0.3 * 1000);
+  const act = mixer.clipAction(clips['kick']);
+  act.setEffectiveTimeScale(KICK_SPEED); // 速く再生
+  // 接触フレームに同期して発射（再生倍率分だけ実時間は短くなる）。
+  setTimeout(() => kickBall(lofted, curve, power), (dur * KICK_CONTACT / KICK_SPEED) * 1000);
 }
 
 // ── シュートのチャージ（ボタン押下中に威力を溜める）────────────────────────
