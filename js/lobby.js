@@ -68,6 +68,15 @@ const CHARACTERS = [
     color: '#ffd400',
     available: true,
   },
+  {
+    id: 'shidou',
+    name: '士道的キャラ',
+    number: '14',
+    fbx: './キャラ/士道的なキャラ/T-Pose.fbx',
+    portrait: './キャラ/士道的なキャラ/ベースイラスト/正面.png',
+    color: '#ff66cc',
+    available: true,
+  },
 ];
 
 let selectedIdx = 0;
