@@ -492,7 +492,7 @@ const SHIDOU_POWER        = 34;   // 水平初速（強烈）
 const SHIDOU_ANGLE_DEG    = 30;   // 地面との入射角（下向き）
 const SHIDOU_JUMP_H       = 3.0;  // プレイヤーのジャンプ頂点(m)
 const SHIDOU_BELLY_OFFSET = 1.0;  // 足元からの腹の高さ(m)＝保持位置
-const SHIDOU_HIT_FRAC     = 0.85; // motion2 のどこで蹴り当てるか（終わりぎわ／大きいほど遅い）
+const SHIDOU_LAND_LEAD    = 0.08; // 着地の何秒前に打ち出すか（士道の落下の直前）
 // スキル中の状態（着地で体の向きを戻す / 切替で1回だけ蹴り落とす）
 let shidouJumpTimer = 0, shidouJumpTotal = 0, shidouJumpPeak = 0;
 let shidouShotAngle = 0, shidouContactT = 0, shidouSmashed = false;
@@ -515,11 +515,11 @@ function shidouSmash() {
 
   fadeToClip('shidou_smash', false);
 
-  // ジャンプ頂点は 01→02 の切替に合わせる。蹴り落とし（打ち出し）はキックモーションが
-  // 当たる motion2 の少し後（SHIDOU_HIT_FRAC）まで遅らせ、それまではボールを腹で保持。
+  // ジャンプ頂点は 01→02 の切替に合わせる。打ち出しは士道が着地する直前
+  // （ジャンプ終了の SHIDOU_LAND_LEAD 秒前）まで遅らせ、それまではボールを腹で保持。
   shidouJumpTotal = combo.duration;
   shidouJumpPeak  = c1.duration + SHIDOU_BLEND;
-  shidouContactT  = c1.duration + SHIDOU_BLEND + c2.duration * SHIDOU_HIT_FRAC;
+  shidouContactT  = Math.max(shidouJumpPeak + 0.05, shidouJumpTotal - SHIDOU_LAND_LEAD);
   shidouJumpTimer = shidouJumpTotal;
   shidouSmashed   = false;
 
