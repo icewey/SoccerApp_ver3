@@ -753,6 +753,77 @@ function stripRootMotion(clip) {
   return clip;
 }
 
+// ── モーション連結 ────────────────────────────────────────────────────────
+// 複数の AnimationClip を時間軸に並べて1本のクリップにする。全クリップが
+// 同じスケルトン（同じトラック名）であることが前提（Mixamo共通なのでOK）。
+// blendTime>0 で繋ぎ目に補間用の隙間を挟み、ポーズの飛び（パッと切替）を緩和する。
+function concatClips(clipList, name = 'combo', blendTime = 0.12) {
+  const clips = clipList.filter(Boolean);
+  if (clips.length === 0) return null;
+  if (clips.length === 1) { const c = clips[0].clone(); c.name = name; return c; }
+
+  // 全クリップに登場するトラックの型と要素数(stride)を収集
+  const info = new Map(); // trackName -> { ctor, stride }
+  for (const clip of clips) for (const tr of clip.tracks) {
+    if (!info.has(tr.name)) {
+      info.set(tr.name, { ctor: tr.constructor, stride: tr.values.length / tr.times.length });
+    }
+  }
+
+  const acc = new Map(); // trackName -> { times:[], values:[] }
+  for (const nm of info.keys()) acc.set(nm, { times: [], values: [] });
+
+  // クリップに無いトラックを保持するための初期値（直前値が無い場合の単位値）
+  const identityFor = (nm, stride) => {
+    if (nm.endsWith('.quaternion')) return [0, 0, 0, 1];
+    if (nm.endsWith('.scale'))      return new Array(stride).fill(1);
+    return new Array(stride).fill(0); // position 等
+  };
+
+  let cursor = 0;
+  clips.forEach((clip, ci) => {
+    const startAt = ci === 0 ? 0 : cursor + blendTime; // 2本目以降は隙間を空けて補間させる
+    const byName = new Map(clip.tracks.map(t => [t.name, t]));
+    for (const [nm, meta] of info) {
+      const a  = acc.get(nm);
+      const tr = byName.get(nm);
+      if (tr) {
+        const n = tr.times.length;
+        for (let i = 0; i < n; i++) {
+          a.times.push(startAt + tr.times[i]);
+          for (let s = 0; s < meta.stride; s++) a.values.push(tr.values[i * meta.stride + s]);
+        }
+      } else {
+        // このクリップに該当トラックが無い → 直前の値（無ければ単位値）を1点だけ保持
+        const last = a.values.length >= meta.stride
+          ? a.values.slice(a.values.length - meta.stride)
+          : identityFor(nm, meta.stride);
+        a.times.push(startAt);
+        for (let s = 0; s < meta.stride; s++) a.values.push(last[s]);
+      }
+    }
+    cursor = startAt + clip.duration;
+  });
+
+  const tracks = [];
+  for (const [nm, meta] of info) {
+    const a = acc.get(nm);
+    tracks.push(new meta.ctor(nm, new Float32Array(a.times), new Float32Array(a.values)));
+  }
+  return new THREE.AnimationClip(name, cursor, tracks);
+}
+
+// clips から名前で複数クリップを連結し clips[outName] に登録する。
+// 例: buildComboClip('heel_shot', ['ヒールリフト', 'kick'], 0.15)
+function buildComboClip(outName, sourceNames, blendTime = 0.12) {
+  const src = sourceNames.map(n => clips[n]);
+  const missing = sourceNames.filter((n, i) => !src[i]);
+  if (missing.length) { console.warn(`combo "${outName}": 未ロードのクリップ`, missing); return null; }
+  const combo = concatClips(src, outName, blendTime);
+  if (combo) clips[outName] = combo;
+  return combo;
+}
+
 // ── アニメ状態プロキシ（getter/setter で let 変数を共有参照）─────────────
 const playerAnim = {
   get mixer()   { return mixer; },        set mixer(v)   { mixer = v; },
