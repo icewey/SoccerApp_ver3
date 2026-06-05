@@ -1692,7 +1692,7 @@ const smoothCamTarget = new THREE.Vector3(0, 1, 0);
 const camLead       = new THREE.Vector3();   // 現在のリードオフセット（ワールド・スムーズ済み）
 const _prevPlayerPos = new THREE.Vector3();  // 前フレームのプレイヤー位置（移動方向の算出用）
 let _prevPlayerPosInit = false;
-const LEAD_DIST     = 5;    // 前方何メートルを中心にするか
+const LEAD_DIST     = 3;    // 前方何メートルを中心にするか
 const LEAD_MIN_MOVE = 0.01; // この移動量(/frame)未満は停止扱い→中心をプレイヤーへ戻す
 
 function getDesiredAnim() {
