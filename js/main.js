@@ -339,8 +339,10 @@ const SKILL_BY_CHAR = {
   barou:   'barou_curve',   // 馬狼: ほんの少し曲がる強烈カーブ（赤黒エフェクト）
   chigiri: 'chigiri_boost', // 千切: ドリブル突破・加速（ピンクエフェクト）
   bachira: 'bachira_dash',  // 蜂楽: その場フェイント→急加速（黄エフェクト・周囲の敵をフリーズ）
+  reio:    'reo_copy',      // 玲王: 近くの敵のスキルをコピーして発動（紫エフェクト）
 };
 let playerSkill  = 'spin';
+let enemyCharId  = null;  // 敵CPUのキャラID（玲王のコピー用にスキルを引く）
 let skillSession = 0; // スキル中の stale setTimeout を無効化するカウンタ
 let chigiriBoostTimer = 0; // 千切ブースト残り時間（>0で加速・奪取不可・ピンク残像）
 let bachiraSkillTimer = 0; // 蜂楽スキル残り時間（>0で操作ロック・奪取不可・黄オーラ）
@@ -355,7 +357,22 @@ function useSkill() {
   else if (playerSkill === 'barou_curve')   barouCurveShot();
   else if (playerSkill === 'chigiri_boost') chigiriBoost();
   else if (playerSkill === 'bachira_dash')  bachiraDash();
+  else if (playerSkill === 'reo_copy')      reoCopySkill();
   else startSpin(); // デフォルト: スピン（ドリブル中のみ・内部でガード）
+}
+
+// 玲王: 近く(REO_COPY_RAD内)にいる敵CPUの固有スキルをコピーして発動する。
+const REO_COPY_RAD = 12;
+function reoCopySkill() {
+  if (!hasEnemy || !enemy) { startSpin(); return; }
+  const d = new THREE.Vector3().subVectors(enemy.position, player.position).setY(0).length();
+  if (d > REO_COPY_RAD) { startSpin(); return; } // 近くにいなければ通常スピン
+  const copied = SKILL_BY_CHAR[enemyCharId] || 'spin';
+  if      (copied === 'fake_volley')   nagiFakeVolley();
+  else if (copied === 'barou_curve')   barouCurveShot();
+  else if (copied === 'chigiri_boost') chigiriBoost();
+  else if (copied === 'bachira_dash')  bachiraDash();
+  else startSpin(); // 敵が玲王/無スキルなら通常スピン
 }
 
 // 凪の2段式フェイクボレー:
@@ -495,13 +512,12 @@ function updateBachira(dt) {
   if (bachiraSkillTimer <= 0) return;
   const elapsed = bachiraSkillTotal - bachiraSkillTimer;
   bachiraSkillTimer -= dt;
-  // motion1 はその場（自動移動なし）。motion2 区間で前方へ一気に加速。
-  if (elapsed >= bachiraDashStart) {
-    const f = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
-    player.position.addScaledVector(f, BACHIRA_DASH_SPEED * dt);
-    player.position.y = groundY;
-    charClampToField(playerChar);
-  }
+  // motion1 はドリブル速度の半分で前進、motion2 区間で前方へ一気に加速。
+  const f = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+  const speed = (elapsed >= bachiraDashStart) ? BACHIRA_DASH_SPEED : RUN_SPEED * 0.5;
+  player.position.addScaledVector(f, speed * dt);
+  player.position.y = groundY;
+  charClampToField(playerChar);
 }
 
 // ── 敵シュート（charShoot を使用）────────────────────────────────────────
@@ -1682,6 +1698,8 @@ export function startGame(config) {
   playerFootSign = config.leftFooted ? -1 : 1;
   // 固有スキル: キャラIDから決定（未登録は spin）
   playerSkill = SKILL_BY_CHAR[config.charId] || 'spin';
+  enemyCharId = config.enemyId || null; // 玲王のコピー用
+
   skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
@@ -2227,6 +2245,7 @@ function updateCharFx(dt) {
     if (_auraTimer >= 0.045) {
       _auraTimer = 0;
       if (playerSkill === 'fake_volley') spawnAuraParticle(player, 0x0a0a0a, THREE.NormalBlending);
+      if (playerSkill === 'reo_copy')    spawnAuraParticle(player, 0x9b30ff, THREE.NormalBlending); // 玲王: 常時紫
       if (chigiriBoostTimer > 0)          spawnAuraParticle(player, 0xff3399, THREE.NormalBlending);
       if (bachiraSkillTimer > 0)          spawnAuraParticle(player, 0xffd400, THREE.NormalBlending);
     }

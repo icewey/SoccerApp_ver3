@@ -207,7 +207,8 @@ function kickOff() {
     : null;
 
   closeLobbyAndLoad();
-  startGame({ charFbx: char.fbx, charId: char.id, fieldSize, enemyFbx: enemyChar?.fbx ?? null });
+  startGame({ charFbx: char.fbx, charId: char.id, fieldSize,
+    enemyFbx: enemyChar?.fbx ?? null, enemyId: enemyChar?.id ?? null });
 }
 
 // PK戦: プレイヤー vs CPUキーパー
