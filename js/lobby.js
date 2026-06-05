@@ -220,6 +220,29 @@ function startPK() {
   startGame({ charFbx: char.fbx, charId: char.id, fieldSize: 'full', enemyFbx: null, pk: true });
 }
 
+// 2vs2: プレイヤー＋味方CPU vs 敵CPU2人
+function start2v2() {
+  const char = CHARACTERS[selectedIdx];
+  if (!char.available) return;
+  requestFullscreen();
+
+  // プレイヤー以外から味方1・敵2をランダムに選ぶ（重複なし、足りなければ流用）
+  const pool = CHARACTERS.filter((c, i) => c.available && i !== selectedIdx);
+  const shuffled = pool.slice().sort(() => Math.random() - 0.5);
+  const allyC   = shuffled[0] || char;
+  const enemy1  = shuffled[1] || char;
+  const enemy2  = shuffled[2] || allyC;
+
+  closeLobbyAndLoad();
+  startGame({
+    charFbx: char.fbx, charId: char.id, fieldSize,
+    mode2v2: true,
+    allyFbx:   allyC.fbx,  allyId:   allyC.id,
+    enemy1Fbx: enemy1.fbx, enemy1Id: enemy1.id,
+    enemy2Fbx: enemy2.fbx, enemy2Id: enemy2.id,
+  });
+}
+
 function init() {
   render();
 
@@ -234,6 +257,7 @@ function init() {
 
   document.getElementById('lb-kickoff').addEventListener('click', kickOff);
   document.getElementById('lb-pk').addEventListener('click', startPK);
+  document.getElementById('lb-2v2').addEventListener('click', start2v2);
 
   // ── モード切替 ───────────────────────────────────────────────────
   function setMode(real) {

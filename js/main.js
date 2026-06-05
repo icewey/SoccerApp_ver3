@@ -163,8 +163,20 @@ let enemyTackleCooldown = 0;
 let hasEnemy = false;
 const ENEMY_TACKLE_COOLDOWN  = 2.5;
 
+// ── 2vs2 用のCPUエンティティ（味方1人＋敵2人）────────────────────────────────
+// チームA = プレイヤー＋味方(ally) / チームB = 敵2人(enemy, enemy2)。
+// 敵#1は既存の enemy グループを流用し、味方と敵#2を新規に用意する。
+let mode2v2 = false;          // 2vs2モードか（trueの間は専用AI/所有権を使う）
+const ally   = new THREE.Group();
+const enemy2 = new THREE.Group();
+let allyMixer   = null, allyCurrent   = null;
+let enemy2Mixer = null, enemy2Current = null;
+const allyChar   = { group: ally,   animState: null };
+const enemy2Char = { group: enemy2, animState: null };
+
 // ── ボール所有権 ───────────────────────────────────────────────────────────
-let ballOwner = 'none'; // 'player' | 'enemy' | 'none'
+// 2vs2では 'ally' / 'enemy2' も取りうる。ソロ/PK/MPでは 'player' | 'enemy' | 'none'。
+let ballOwner = 'none';
 let playerPickupCooldown = 0; // キック直後に自分がボールを即再拾いするのを防ぐ(秒)
 let gkBallHolder = 'none'; // 'none' | 'player_gk' | 'enemy_gk'
 let gkSessionId  = 0;     // ゲーム再起動時のstale setTimeoutを無効化するカウンタ
@@ -337,6 +349,21 @@ function startTackle() {
   tackleTimer = clips['tackle'].duration + 0.1;
   tackleLungeTimer = TACKLE_LOCK; // 前進ランジ（移動）だけは短く切り上げて飛びすぎを防ぐ
   fadeToClip('tackle', false);
+}
+
+// プレイヤーのパス（2vs2専用）。パスモーション再生 → 接触フレームで味方へダイレクトパス。
+// パス中は isPassing=true でドリブル保持を維持し、接触まではボールを足元に置く。
+function startPass() {
+  if (!mode2v2 || !gameStarted || isGoalScene) return;
+  if (ballOwner !== 'player' || isPassing || isKicking || isTackling) return;
+  if (playerStunTimer > 0 || !clips['pass'] || !mixer) return;
+  endSpin();
+  isPassing = true;
+  fadeToClip('pass', false);
+  const dur = clips['pass'].duration;
+  const sess = skillSession;
+  setTimeout(() => { if (sess === skillSession && ballOwner === 'player') doPass('player'); },
+    dur * 0.35 * 1000);
 }
 
 // ── 固有スキル ────────────────────────────────────────────────────────────
@@ -830,6 +857,12 @@ function updateBall(dt) {
     return;
   }
 
+  ballLoosePhysics(dt);
+}
+
+// ── ルーズボール（誰も保持していない）の物理＋ゴール/壁判定（所有権非依存）──
+// updateBall（ソロ/MP）と update2v2（2vs2）で共有する。
+function ballLoosePhysics(dt) {
   // 通常物理
   ballVel.y -= BALL_GRAVITY * dt;
   // カーブ: 空中で水平速度ベクトルを回転させてバナナ軌道（マグナス効果）
@@ -906,6 +939,9 @@ window.addEventListener('keydown', e => {
     }
     if (e.code === 'KeyZ') {
       useSkill(); // 固有スキル（デフォルト=スピン、凪=フェイクボレー）
+    }
+    if (e.code === 'KeyG') {
+      startPass(); // パス（2vs2モードのみ・内部でガード）
     }
   }
 }, { capture: true }); // captureでブラウザより先にキーを受け取る
@@ -1040,6 +1076,16 @@ const enemyAnim = {
   get mixer()   { return enemyMixer; },   set mixer(v)   { enemyMixer = v; },
   get current() { return enemyCurrent; }, set current(v) { enemyCurrent = v; },
 };
+const allyAnim = {
+  get mixer()   { return allyMixer; },    set mixer(v)   { allyMixer = v; },
+  get current() { return allyCurrent; },  set current(v) { allyCurrent = v; },
+};
+const enemy2Anim = {
+  get mixer()   { return enemy2Mixer; },   set mixer(v)   { enemy2Mixer = v; },
+  get current() { return enemy2Current; }, set current(v) { enemy2Current = v; },
+};
+allyChar.animState   = allyAnim;
+enemy2Char.animState = enemy2Anim;
 const playerGKAnim = {
   get mixer()   { return playerGKMixer; },   set mixer(v)   { playerGKMixer = v; },
   get current() { return playerGKCurrent; }, set current(v) { playerGKCurrent = v; },
@@ -1380,6 +1426,36 @@ function resetAfterGoal(scorer) {
     if (enemyMixer) { enemyMixer.stopAllAction(); enemyCurrent = null; }
   }
 
+  // ── 2vs2 のキックオフリセット ──────────────────────────────────────────
+  if (mode2v2) {
+    passState = null;
+    for (const c of cpu2List) {
+      c.stun = 0; c.tackling = false; c.kicking = false; c.passing = false;
+      c.tackleCd = 0; c.pickupCd = 0; c.passCd = 0; c.oneShotTimer = 0;
+    }
+    if (allyMixer)   { allyMixer.stopAllAction();   allyCurrent   = null; }
+    if (enemyMixer)  { enemyMixer.stopAllAction();  enemyCurrent  = null; }
+    if (enemy2Mixer) { enemy2Mixer.stopAllAction(); enemy2Current = null; }
+    ally.position.set(-8, groundY, -7);  ally.rotation.y   = -Math.PI / 2;
+    enemy.position.set(8, groundY, 7);   enemy.rotation.y  =  Math.PI / 2;
+    enemy2.position.set(8, groundY, -7); enemy2.rotation.y =  Math.PI / 2;
+    if (scorer === 'cpu') {
+      // プレイヤー失点 → プレイヤーチームがキックオフ（プレイヤー保持）
+      player.position.set(0, groundY, 0); player.rotation.y = -Math.PI / 2;
+      ballOwner = 'player'; isDribbling = true;
+    } else {
+      // CPU失点 → 敵チームがキックオフ（敵#1保持）
+      player.position.set(-8, groundY, 5); player.rotation.y = -Math.PI / 2;
+      enemy.position.set(0, groundY, 0);   enemy.rotation.y  =  Math.PI / 2;
+      ballOwner = 'enemy'; isDribbling = false;
+    }
+    ballMesh.position.set(0, BALL_R, 0);
+    charAnim(allyChar, 'idle'); charAnim(enemyChar, 'idle'); charAnim(enemy2Char, 'idle');
+    fadeToClip('idle');
+    if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
+    return;
+  }
+
   // ── キックオフ: 失点した側がボールを持って中央からスタート ──────────────
   // scorer='player'(プレイヤー得点)=CPU失点 → CPUがキックオフ
   // scorer='cpu'(CPU得点)=プレイヤー失点 → プレイヤーがキックオフ
@@ -1630,6 +1706,9 @@ function onCoreLoaded() {
   loadingBar.style.width = pct + '%';
   if (coreReady === CORE_TOTAL) {
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
+    if (mode2v2) {
+      for (const g of [ally, enemy, enemy2]) { g.position.y = groundY; g.visible = true; }
+    }
     // PKモードでは自陣GK（プレイヤー側）は不要なので非表示
     if (playerGKMixer && !isPK) {
       const pgy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
@@ -1685,6 +1764,7 @@ function onCoreLoaded() {
     gameStarted = true;
     fadeToClip('idle');
     if (hasEnemy) fadeToEnemyClip('idle');
+    if (mode2v2) { charAnim(allyChar, 'idle'); charAnim(enemyChar, 'idle'); charAnim(enemy2Char, 'idle'); }
     if (isMultiplayer) fadeToRemoteClip('idle');
 
     if (isPK) {
@@ -1723,6 +1803,22 @@ export function startGame(config) {
   // enemy を scene から除去（CPU戦の残骸防止）
   scene.remove(enemy);
   while (enemy.children.length > 0) enemy.remove(enemy.children[0]);
+  // 2vs2 の味方・敵#2 を除去＋状態リセット
+  scene.remove(ally);   while (ally.children.length   > 0) ally.remove(ally.children[0]);
+  scene.remove(enemy2); while (enemy2.children.length > 0) enemy2.remove(enemy2.children[0]);
+  allyMixer = null; allyCurrent = null;
+  enemy2Mixer = null; enemy2Current = null;
+  // 共通関数が参照する group / animState を結線（2vs2では enemy も流用する）
+  allyChar.group = ally;     allyChar.animState   = allyAnim;
+  enemy2Char.group = enemy2; enemy2Char.animState = enemy2Anim;
+  enemyChar.group = enemy;   enemyChar.animState  = enemyAnim;
+  passState = null;
+  mode2v2 = !isPK && !config.mp && !!config.mode2v2;
+  for (const c of cpu2List) {
+    c.stun = 0; c.tackling = false; c.kicking = false; c.passing = false;
+    c.tackleCd = 0; c.pickupCd = 0; c.passCd = 0; c.oneShotTimer = 0;
+  }
+  playerStunTimer = 0; isPassing = false;
   // GK の旧キャラ削除（scene から除去せず children だけクリア）
   while (playerGKGroup.children.length > 0) playerGKGroup.remove(playerGKGroup.children[0]);
   playerGKGroup.visible = false;
@@ -1767,6 +1863,15 @@ export function startGame(config) {
 
   hasEnemy = isPK ? false : !!config.enemyFbx; // PKは敵CPUなし（GKのみ）
   if (hasEnemy) CORE_TOTAL++;
+
+  // 2vs2: キックオフ配置（プレイヤーは自陣左、攻撃ゴール=+X を向く）＋ボール中央
+  if (mode2v2) {
+    player.position.set(-8, 0, 5); // yはキャラ読み込み時に接地補正される
+    player.rotation.y = -Math.PI / 2;
+    ballMesh.position.set(0, BALL_R, 0);
+    ballVel.set(0, 0, 0);
+    ballCurveRate = 0;
+  }
 
   // マルチプレイヤー設定
   if (config.mp) {
@@ -1904,6 +2009,44 @@ export function startGame(config) {
         onCoreLoaded();
       }
     );
+  }
+
+  // ── 2vs2: 味方CPU＋敵CPU2人をロード ──────────────────────────────────
+  if (mode2v2) {
+    CORE_TOTAL += 3;
+    c2Ally.zoneZ   = 0;                      // 味方は中央ゾーン（広めにカバー）
+    c2Enemy.zoneZ  =  FIELD_HALF_D * 0.35;   // 敵#1は上半分ゾーン
+    c2Enemy2.zoneZ = -FIELD_HALF_D * 0.35;   // 敵#2は下半分ゾーン
+    const loadCpu2 = (group, animProxy, path, tint, sx, sz, markerColor) => {
+      loader.load(path, fbx => {
+        fbx.scale.setScalar(0.01);
+        fbx.rotation.y = Math.PI;
+        fbx.traverse(c => {
+          if (c.isMesh) {
+            c.castShadow = true; c.receiveShadow = true;
+            c.material = Array.isArray(c.material)
+              ? c.material.map(m => { const mc = m.clone(); mc.color.set(tint); return mc; })
+              : (() => { const mc = c.material.clone(); mc.color.set(tint); return mc; })();
+          }
+        });
+        group.add(fbx);
+        group.position.set(sx, 0, sz);
+        group.visible = false; // ゲーム開始まで非表示（Tポーズ防止）
+        animProxy.mixer = new THREE.AnimationMixer(fbx);
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(0.12, 8, 8),
+          new THREE.MeshBasicMaterial({ color: markerColor })
+        );
+        marker.position.set(0, 2.05, 0);
+        group.add(marker);
+        scene.add(group);
+        onCoreLoaded();
+      }, undefined, err => { console.error('2vs2 load failed:', path, err); onCoreLoaded(); });
+    };
+    // 味方=青く着色＋水色マーカー / 敵=赤く着色＋赤マーカー（味方・敵を見分けやすく）
+    loadCpu2(ally,   allyAnim,   config.allyFbx   || config.charFbx, 0x4488ff, -8, -7, 0x44aaff);
+    loadCpu2(enemy,  enemyAnim,  config.enemy1Fbx || config.charFbx, 0xff4444,  8,  7, 0xff2222);
+    loadCpu2(enemy2, enemy2Anim, config.enemy2Fbx || config.charFbx, 0xff4444,  8, -7, 0xff2222);
   }
 
   // ゴールキーパーロード（ソロモードのみ、両チーム固定キャラ）
@@ -2290,6 +2433,352 @@ function clearCharFx() {
   auraParticles.length = 0; charGhosts.length = 0;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// ── 2vs2 モード（味方CPU1人＋敵CPU2人）──────────────────────────────────────
+// チームA = プレイヤー＋味方(ally) / チームB = 敵2人(enemy, enemy2)。
+// 守備はゾーンディフェンス、攻撃はオフザボールでスペースへ動いてパスを受ける。
+// パスボタンでダイレクトパス、軌道上に敵がいればパスカット（出し手＋受け手フリーズ）。
+// ════════════════════════════════════════════════════════════════════════════
+function makeCpu2(group, char, key, team) {
+  return {
+    group, char, key, team,
+    stun: 0, tackling: false, kicking: false, passing: false,
+    tackleCd: 0, pickupCd: 0, passCd: 0, oneShotTimer: 0, zoneZ: 0,
+  };
+}
+const c2Ally   = makeCpu2(ally,   allyChar,   'ally',   'A');
+const c2Enemy  = makeCpu2(enemy,  enemyChar,  'enemy',  'B');
+const c2Enemy2 = makeCpu2(enemy2, enemy2Char, 'enemy2', 'B');
+const cpu2List = [c2Ally, c2Enemy, c2Enemy2];
+// プレイヤーを共通エンティティ形式で参照（stun はゲッターで playerStunTimer を共有）
+const playerEntity2 = { key: 'player', group: player, char: playerChar, get stun() { return playerStunTimer; } };
+
+const PASS_INTERCEPT_R = 1.8;  // パス軌道のカット判定半径(m)
+const SUPPORT_MIN_SEP  = 7.0;  // サポート時にボール保持者へ密着しない最小距離
+const CPU_TACKLE_RANGE = 3.0;  // CPUがタックルを試みる距離
+const ZONE_BAND        = 0.55; // ゾーン幅係数（×FIELD_HALF_D）
+
+let passState = null; // パス飛行中の状態 { passerKey, receiverKey, cutterKey, timer }
+
+const team2     = k => (k === 'player' || k === 'ally') ? 'A' : (k === 'enemy' || k === 'enemy2') ? 'B' : null;
+const sameTeam2 = (a, b) => team2(a) !== null && team2(a) === team2(b);
+function entity2(key) { return key === 'player' ? playerEntity2 : (cpu2List.find(c => c.key === key) || null); }
+function teammate2(key) {
+  if (key === 'player') return c2Ally;
+  if (key === 'ally')   return playerEntity2;
+  if (key === 'enemy')  return c2Enemy2;
+  if (key === 'enemy2') return c2Enemy;
+  return null;
+}
+function opponents2(key) {
+  const t = team2(key);
+  return [playerEntity2, c2Ally, c2Enemy, c2Enemy2].filter(e => team2(e.key) !== t);
+}
+function distXZ(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
+function nearestOpp2(c) {
+  let best = null, bd = Infinity;
+  for (const o of opponents2(c.key)) {
+    const d = distXZ(o.group.position, c.group.position);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return { opp: best, dist: bd };
+}
+// 始点→終点の線分上に敵がいなければ true（対角パスのレーン判定）
+function laneClear2(from, to, opps) {
+  const dx = to.x - from.x, dz = to.z - from.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.001) return false;
+  const ux = dx / len, uz = dz / len;
+  for (const o of opps) {
+    if (o.stun > 0) continue;
+    const rx = o.group.position.x - from.x, rz = o.group.position.z - from.z;
+    const t = rx * ux + rz * uz;
+    if (t < 1.0 || t > len - 0.6) continue;
+    const perp = Math.abs(rx * uz - rz * ux);
+    if (perp < PASS_INTERCEPT_R) return false;
+  }
+  return true;
+}
+// 任意エンティティをフリーズ＋‼️
+function freezeEntity2(key, dur) {
+  if (key === 'player') { playerStunTimer = Math.max(playerStunTimer, dur); spawnStunMark(player, dur); }
+  else { const c = entity2(key); if (c) { c.stun = Math.max(c.stun, dur); spawnStunMark(c.group, dur); } }
+}
+function isClosestDefender2(c) {
+  let best = c, bd = distXZ(ballMesh.position, c.group.position);
+  for (const o of cpu2List) {
+    if (o === c || o.team !== c.team) continue;
+    const d = distXZ(ballMesh.position, o.group.position);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best === c;
+}
+
+// ── パス実行（出し手→味方へのダイレクトパス。軌道上に敵がいればカット）──────
+const PASS_LIFT = 3.2;
+function doPass(passerKey) {
+  const passer = entity2(passerKey), recv = teammate2(passerKey);
+  if (!passer || !recv) return;
+  const from = passer.group.position, to = recv.group.position;
+  const dx = to.x - from.x, dz = to.z - from.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.6) return;
+  const ux = dx / dist, uz = dz / dist;
+  // カット判定: パス軌道（始点〜終点）の近くにいる敵を拾う（最も出し手寄りを優先）
+  let cutter = null, bestT = Infinity;
+  for (const o of opponents2(passerKey)) {
+    if (o.stun > 0) continue;
+    const rx = o.group.position.x - from.x, rz = o.group.position.z - from.z;
+    const t = rx * ux + rz * uz;
+    if (t < 1.0 || t > dist - 0.4) continue;
+    const perp = Math.abs(rx * uz - rz * ux);
+    if (perp < PASS_INTERCEPT_R && t < bestT) { bestT = t; cutter = o; }
+  }
+  const speed = Math.max(13, Math.min(26, dist * 3.0));
+  ballOwner = 'none'; isDribbling = false; ballCurveRate = 0;
+  ballMesh.position.y = Math.max(ballMesh.position.y, BALL_R);
+  ballVel.set(ux * speed, PASS_LIFT, uz * speed);
+  passState = { passerKey, receiverKey: recv.key, cutterKey: cutter ? cutter.key : null, timer: 0 };
+}
+function cpu2Pass(c) {
+  c.passing = true; c.passCd = 2.5;
+  const dur = clips['pass'] ? clips['pass'].duration : 0.6;
+  c.oneShotTimer = dur;
+  charAnim(c.char, 'pass', false);
+  const sess = skillSession;
+  setTimeout(() => { if (sess === skillSession && ballOwner === c.key) doPass(c.key); }, dur * 0.35 * 1000);
+}
+function cpu2Shoot(c) {
+  if (c.kicking) return;
+  const goalX = c.team === 'A' ? GOAL_X : -GOAL_X;
+  cpuShoot({
+    ownerKey: c.key, goalX, anim: c.char.animState,
+    getKicking: () => c.kicking, setKicking: v => { c.kicking = v; },
+    onDone: () => { c.kicking = false; c.pickupCd = 1.5; },
+  });
+  c.oneShotTimer = clips['kick'] ? clips['kick'].duration : 0.6;
+}
+function shouldCpu2Pass(c, mate) {
+  if (!mate || mate.stun > 0) return false;
+  const from = c.group.position, to = mate.group.position;
+  const dist = distXZ(from, to);
+  if (dist < 5 || dist > 42) return false;
+  if (!laneClear2(from, to, opponents2(c.key))) return false; // 対角線上に敵がいない
+  const gx = c.team === 'A' ? GOAL_X : -GOAL_X;
+  const mateAhead = gx > 0 ? (to.x > from.x - 3) : (to.x < from.x + 3);
+  if (!mateAhead) return false;
+  const mateAdv  = gx > 0 ? (to.x - from.x) : (from.x - to.x); // 味方がどれだけ前進しているか
+  const pressured = nearestOpp2(c).dist < 6.0;
+  return pressured || mateAdv > 6;
+}
+
+// ── パス飛行中の処理（受け手 or カッター到達で所有権確定）────────────────────
+function update2v2PassFlight(dt) {
+  passState.timer += dt;
+  ballLoosePhysics(dt);
+  if (isGoalScene) { passState = null; return; }
+  const targetKey = passState.cutterKey || passState.receiverKey;
+  const tgt = entity2(targetKey);
+  const d = tgt ? distXZ(ballMesh.position, tgt.group.position) : 999;
+  if (d < DRIBBLE_DIST * 1.3) {
+    if (passState.cutterKey) {
+      ballOwner = passState.cutterKey;
+      const cut = entity2(passState.cutterKey);
+      if (cut && cut.pickupCd !== undefined) cut.pickupCd = 0.25;
+      // パスカット成立: 出し手と受け手が‼️でフリーズ
+      freezeEntity2(passState.passerKey,   STUN_TIME);
+      freezeEntity2(passState.receiverKey, STUN_TIME);
+    } else {
+      ballOwner = passState.receiverKey;
+    }
+    passState = null;
+  } else if (passState.timer > 2.4 || ballVel.length() < 1.2) {
+    passState = null; // 届かず＝ルーズボール
+  }
+}
+
+// ── 2vs2 メイン更新（所有権・CPU AI・ドリブル配置・ルーズ物理を一括処理）─────
+function update2v2(dt) {
+  if (allyMixer)   allyMixer.update(dt);
+  if (enemyMixer)  enemyMixer.update(dt);
+  if (enemy2Mixer) enemy2Mixer.update(dt);
+  if (!gameStarted || isGoalScene) return;
+
+  for (const c of cpu2List) {
+    if (c.stun > 0)     c.stun     -= dt;
+    if (c.tackleCd > 0) c.tackleCd -= dt;
+    if (c.pickupCd > 0) c.pickupCd -= dt;
+    if (c.passCd > 0)   c.passCd   -= dt;
+    if (c.oneShotTimer > 0) {
+      c.oneShotTimer -= dt;
+      if (c.oneShotTimer <= 0) { c.tackling = false; c.kicking = false; c.passing = false; }
+    }
+  }
+  if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
+
+  // GK保持中はボール操作なし（CPUは動く）
+  if (gkBallHolder !== 'none') { isDribbling = false; for (const c of cpu2List) update2v2Cpu(c, dt); return; }
+
+  // 千切/蜂楽スキル中はプレイヤー保持を固定
+  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0) && !isKicking) ballOwner = 'player';
+
+  // パス飛行中は所有権判定を止めて専用処理へ
+  if (passState) { update2v2PassFlight(dt); return; }
+
+  update2v2Possession(dt);
+  for (const c of cpu2List) update2v2Cpu(c, dt);
+
+  // 保持者の足元にボールを置く or ルーズ物理
+  if (ballOwner === 'player') {
+    charDribble(playerChar, dt);
+    const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+    const moving = keys.has('ArrowUp') || keys.has('KeyW') || keys.has('ArrowDown') || keys.has('KeyS')
+                || keys.has('ArrowLeft') || keys.has('KeyA') || keys.has('ArrowRight') || keys.has('KeyD')
+                || joystick.active;
+    if (moving) {
+      const rollDir = (keys.has('ArrowUp') || keys.has('KeyW') || joystick.active) ? 1 : -1;
+      ballMesh.rotateOnWorldAxis(new THREE.Vector3(facing.z, 0, -facing.x), rollDir * RUN_SPEED * dt / BALL_R);
+    }
+    isDribbling = true;
+  } else if (ballOwner === 'ally')   { charDribble(allyChar,   dt); isDribbling = false; }
+  else if   (ballOwner === 'enemy')  { charDribble(enemyChar,  dt); isDribbling = false; }
+  else if   (ballOwner === 'enemy2') { charDribble(enemy2Char, dt); isDribbling = false; }
+  else { isDribbling = false; ballLoosePhysics(dt); }
+}
+
+function update2v2Possession(dt) {
+  const DR = DRIBBLE_DIST;
+  const skillHold = (chigiriBoostTimer > 0 || bachiraSkillTimer > 0);
+  // 手放し: プレイヤー
+  if (ballOwner === 'player') {
+    const dp = distXZ(ballMesh.position, player.position);
+    if (!skillHold && (dp >= DR * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
+  }
+  // 手放し: CPU
+  for (const c of cpu2List) {
+    if (ballOwner === c.key) {
+      const d = distXZ(ballMesh.position, c.group.position);
+      if (d >= DR * 1.5 && !c.kicking && !c.passing) ballOwner = 'none';
+    }
+  }
+  // タックル奪取: プレイヤー → 敵チームから
+  if (isTackling && playerPickupCooldown <= 0 && ballOwner !== 'player' && team2(ballOwner) === 'B') {
+    const dp = distXZ(ballMesh.position, player.position);
+    if (dp < TACKLE_DIST) {
+      const victim = entity2(ballOwner);
+      ballOwner = 'player';
+      if (victim && victim.pickupCd !== undefined) victim.pickupCd = 0.5;
+      freezeEntity2(victim ? victim.key : 'enemy', STUN_TIME);
+    }
+  }
+  // タックル奪取: CPU → 相手チームから
+  for (const c of cpu2List) {
+    if (!c.tackling || c.pickupCd > 0) continue;
+    if (ballOwner === 'none' || sameTeam2(c.key, ballOwner)) continue;
+    if (ballOwner === 'player' && (skillHold || isKicking)) continue;
+    if (distXZ(ballMesh.position, c.group.position) >= TACKLE_DIST) continue;
+    const victimKey = ballOwner;
+    ballOwner = c.key;
+    if (victimKey === 'player') { playerPickupCooldown = 0.6; freezeEntity2('player', STUN_TIME); }
+    else { const v = entity2(victimKey); if (v && v.pickupCd !== undefined) v.pickupCd = 0.6; freezeEntity2(victimKey, STUN_TIME); }
+  }
+  // ルーズボール拾得（最も近いエンティティ）
+  if (ballOwner === 'none') {
+    let best = null, bestD = DR;
+    if (!isKicking && playerPickupCooldown <= 0) {
+      const d = distXZ(ballMesh.position, player.position);
+      if (d < bestD) { bestD = d; best = 'player'; }
+    }
+    for (const c of cpu2List) {
+      if (c.kicking || c.passing || c.pickupCd > 0 || c.stun > 0) continue;
+      const d = distXZ(ballMesh.position, c.group.position);
+      if (d < bestD) { bestD = d; best = c.key; }
+    }
+    if (best) ballOwner = best;
+  }
+}
+
+function update2v2Cpu(c, dt) {
+  if (c.stun > 0)   { charAnim(c.char, 'idle'); charClampToField(c.char); return; }
+  if (c.tackling)   { charTackleForward(c.char, dt); charClampToField(c.char); return; }
+  if (c.kicking || c.passing || c.oneShotTimer > 0) { charClampToField(c.char); return; }
+
+  const attackGoalX = c.team === 'A' ? GOAL_X : -GOAL_X;
+  const teamOwns = ballOwner !== 'none' && team2(ballOwner) === c.team;
+
+  if (ballOwner === c.key) update2v2Carrier(c, attackGoalX, dt);
+  else if (teamOwns)       update2v2Support(c, attackGoalX, dt);
+  else                     update2v2Defend(c, -attackGoalX, dt);
+
+  charClampToField(c.char);
+}
+
+function update2v2Carrier(c, gx, dt) {
+  const pos = c.group.position;
+  const penZ = FIELD_HALF_D * 0.611;
+  // シュート判定（敵CPUと同じ基準）
+  const inThird = c.team === 'A' ? pos.x > (GOAL_X - FIELD_HALF_W * 0.48)
+                                 : pos.x < -(GOAL_X - FIELD_HALF_W * 0.48);
+  if (inThird && Math.abs(pos.z) <= penZ) {
+    const distGoal = Math.abs(gx - pos.x);
+    if (Math.abs(pos.z) / Math.max(distGoal, 0.1) <= 0.65 || distGoal <= 8) { cpu2Shoot(c); return; }
+  }
+  // パス判定（味方が前方で開いている時）
+  const mate = teammate2(c.key);
+  if (c.passCd <= 0 && shouldCpu2Pass(c, mate)) { cpu2Pass(c); return; }
+  // ドリブルでゴールへ
+  const tx = gx > 0 ? Math.min(gx - 4, pos.x + 9) : Math.max(gx + 4, pos.x - 9);
+  const moving = charMoveTo(c.char, new THREE.Vector3(tx, 0, pos.z * 0.7), dt);
+  charAnim(c.char, moving ? (clips['dribble'] ? 'dribble' : 'run') : 'idle');
+}
+
+function update2v2Support(c, gx, dt) {
+  const carrier = entity2(ballOwner);
+  if (!carrier) { update2v2Defend(c, -gx, dt); return; }
+  const cpos = carrier.group.position;
+  // 保持者と逆サイドの前方スペースへ動き、対角のパスコースを作る（密着しない）
+  const side = cpos.z >= 0 ? -1 : 1;
+  let tx = gx > 0 ? Math.min(gx - 8, cpos.x + 8) : Math.max(gx + 8, cpos.x - 8);
+  let tz = side * Math.min(FIELD_HALF_D * 0.62, Math.abs(cpos.z) + 9);
+  const no = nearestOpp2(c);
+  if (no.opp && distXZ(no.opp.group.position, { x: tx, z: tz }) < 4) tz += side * 4.5;
+  tz = Math.max(-FIELD_HALF_D * 0.72, Math.min(FIELD_HALF_D * 0.72, tz));
+  const target = new THREE.Vector3(tx, 0, tz);
+  // 保持者へ密着しない: ターゲットが近すぎたら離す
+  if (distXZ(target, cpos) < SUPPORT_MIN_SEP) {
+    const ax = target.x - cpos.x, az = target.z - cpos.z;
+    const l = Math.hypot(ax, az) || 1;
+    target.x = cpos.x + ax / l * SUPPORT_MIN_SEP;
+    target.z = cpos.z + az / l * SUPPORT_MIN_SEP;
+  }
+  const moving = charMoveTo(c.char, target, dt);
+  charAnim(c.char, moving ? 'run' : 'idle');
+}
+
+function update2v2Defend(c, defendGoalX, dt) {
+  const ball = ballMesh.position;
+  const inMyZone = Math.abs(ball.z - c.zoneZ) < FIELD_HALF_D * ZONE_BAND;
+  let target;
+  if (inMyZone && isClosestDefender2(c)) {
+    target = new THREE.Vector3(ball.x, 0, ball.z); // プレス
+    if (ballOwner !== 'none' && !sameTeam2(c.key, ballOwner)) {
+      const d = distXZ(ball, c.group.position);
+      if (d < CPU_TACKLE_RANGE && c.tackleCd <= 0) {
+        c.tackling = true; c.tackleCd = ENEMY_TACKLE_COOLDOWN;
+        c.oneShotTimer = clips['tackle'] ? clips['tackle'].duration + 0.1 : 1.0;
+        charAnim(c.char, 'tackle', false);
+        charTackleForward(c.char, dt);
+        return;
+      }
+    }
+  } else {
+    // ゾーン保持: 自陣ゴール側に構えつつ自分のゾーンZへ、ボール深さに少し追従
+    target = new THREE.Vector3(defendGoalX * 0.42 + ball.x * 0.28, 0, c.zoneZ * 0.6 + ball.z * 0.25);
+  }
+  const moving = charMoveTo(c.char, target, dt);
+  charAnim(c.char, moving ? 'run' : 'idle');
+}
+
 const clock = new THREE.Clock();
 
 function animate() {
@@ -2301,7 +2790,10 @@ function animate() {
   const remoteRole = mpRole === 'host' ? 'guest' : 'host';
   const remoteOwns = isMultiplayer && mpRemoteBallOwner === remoteRole;
 
-  if (isMultiplayer && remoteOwns) {
+  if (mode2v2) {
+    // 2vs2: 所有権・CPU AI・ドリブル配置・ルーズ物理を update2v2 が一括処理
+    update2v2(dt);
+  } else if (isMultiplayer && remoteOwns) {
     // 相手がボール保持 → 最新受信位置を直接適用（遅延なし）
     const bs = ballBuf.length > 0 ? ballBuf[ballBuf.length - 1] : null;
     if (bs && ballOwner !== 'player') {
@@ -2334,6 +2826,10 @@ function animate() {
     // PK戦: 敵GKのみ守備、updatePKで進行管理（敵CPU・自陣GKは動かさない）
     updateGK(enemyGKChar, eGKSt, GOAL_X, enemyChar, 'enemy_gk', dt);
     updatePK(dt);
+  } else if (mode2v2) {
+    // 2vs2: 両ゴールにGK。スローの戻し先は各チームのCPU（enemy）/プレイヤー。
+    updateGK(playerGKChar, pGKSt, -GOAL_X, playerChar, 'player_gk', dt);
+    updateGK(enemyGKChar,  eGKSt,  GOAL_X, enemyChar,  'enemy_gk',  dt);
   } else if (!isMultiplayer) {
     updateEnemy(dt);
     updateGK(playerGKChar, pGKSt, -GOAL_X, playerChar, 'player_gk', dt);
@@ -2627,6 +3123,15 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     }, { passive: false });
   }
 
+  // パスボタン（2vs2モードでボール所持中のみ有効）
+  const passBtn = document.getElementById('btn-pass');
+  if (passBtn) {
+    passBtn.addEventListener('touchstart', e => {
+      e.preventDefault();
+      startPass();
+    }, { passive: false });
+  }
+
   // ボール所持状態に応じてボタン表示切替
   function updateMobileButtons() {
     const hasBall = ballOwner === 'player';
@@ -2636,6 +3141,7 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     });
     if (tackleBtn) tackleBtn.style.display = hasBall ? 'none' : '';
     if (skillBtn)  skillBtn.style.display  = hasBall ? '' : 'none';
+    if (passBtn)   passBtn.style.display   = (mode2v2 && hasBall) ? '' : 'none';
   }
   // animate() から呼べるようにグローバル化
   window._updateMobileButtons = updateMobileButtons;
