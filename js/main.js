@@ -351,6 +351,13 @@ function startTackle() {
   fadeToClip('tackle', false);
 }
 
+// パスボタンの振り分け（2vs2）。自分が保持中＝出す / 味方が保持中＝要求する。
+function pressPass() {
+  if (!mode2v2) return;
+  if (ballOwner === 'ally') requestPass();
+  else startPass();
+}
+
 // プレイヤーのパス（2vs2専用）。パスモーション再生 → 接触フレームで味方へダイレクトパス。
 // パス中は isPassing=true でドリブル保持を維持し、接触まではボールを足元に置く。
 function startPass() {
@@ -941,7 +948,7 @@ window.addEventListener('keydown', e => {
       useSkill(); // 固有スキル（デフォルト=スピン、凪=フェイクボレー）
     }
     if (e.code === 'KeyG') {
-      startPass(); // パス（2vs2モードのみ・内部でガード）
+      pressPass(); // パス / パス要求（2vs2モードのみ・内部でガード）
     }
   }
 }, { capture: true }); // captureでブラウザより先にキーを受け取る
@@ -2548,6 +2555,15 @@ function cpu2Pass(c) {
   const sess = skillSession;
   setTimeout(() => { if (sess === skillSession && ballOwner === c.key) doPass(c.key); }, dur * 0.35 * 1000);
 }
+
+// プレイヤーが味方CPUにパスを要求する（味方が保持中のみ）。即座に味方→プレイヤーへ
+// ダイレクトパス。軌道上に敵がいれば通常どおりパスカットされる。
+function requestPass() {
+  if (!mode2v2 || !gameStarted || isGoalScene) return;
+  if (ballOwner !== 'ally') return; // 味方が持っている時だけ要求可能
+  if (c2Ally.passing || c2Ally.kicking || c2Ally.stun > 0) return;
+  cpu2Pass(c2Ally); // teammate2('ally') = プレイヤー宛に飛ぶ
+}
 function cpu2Shoot(c) {
   if (c.kicking) return;
   const goalX = c.team === 'A' ? GOAL_X : -GOAL_X;
@@ -3123,12 +3139,12 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     }, { passive: false });
   }
 
-  // パスボタン（2vs2モードでボール所持中のみ有効）
+  // パスボタン（2vs2: 自分保持中=パス / 味方保持中=パス要求）
   const passBtn = document.getElementById('btn-pass');
   if (passBtn) {
     passBtn.addEventListener('touchstart', e => {
       e.preventDefault();
-      startPass();
+      pressPass();
     }, { passive: false });
   }
 
@@ -3141,9 +3157,14 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     });
     if (tackleBtn) tackleBtn.style.display = hasBall ? 'none' : '';
     if (skillBtn)  skillBtn.style.display  = hasBall ? '' : 'none';
+    // パスボタン: 自分保持中=「パス」、味方保持中=「パス要求」。それ以外は非表示。
     // #btn-pass はCSSで display:none を指定しているため、表示時は明示的に flex を入れる
     // （'' だとCSSのnoneに戻り、ボタンが出ないため）。
-    if (passBtn)   passBtn.style.display   = (mode2v2 && hasBall) ? 'flex' : 'none';
+    if (passBtn) {
+      const showPass = mode2v2 && (ballOwner === 'player' || ballOwner === 'ally');
+      passBtn.style.display = showPass ? 'flex' : 'none';
+      if (showPass) passBtn.textContent = ballOwner === 'ally' ? 'パス要求' : 'パス';
+    }
   }
   // animate() から呼べるようにグローバル化
   window._updateMobileButtons = updateMobileButtons;
