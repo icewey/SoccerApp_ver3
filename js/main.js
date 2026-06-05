@@ -492,6 +492,7 @@ const SHIDOU_POWER        = 34;   // 水平初速（強烈）
 const SHIDOU_ANGLE_DEG    = 30;   // 地面との入射角（下向き）
 const SHIDOU_JUMP_H       = 3.0;  // プレイヤーのジャンプ頂点(m)
 const SHIDOU_BELLY_OFFSET = 1.0;  // 足元からの腹の高さ(m)＝保持位置
+const SHIDOU_HIT_FRAC     = 0.35; // motion2 のどこで蹴り当てるか（0=切替直後／大きいほど遅い）
 // スキル中の状態（着地で体の向きを戻す / 切替で1回だけ蹴り落とす）
 let shidouJumpTimer = 0, shidouJumpTotal = 0, shidouJumpPeak = 0;
 let shidouShotAngle = 0, shidouContactT = 0, shidouSmashed = false;
@@ -514,10 +515,11 @@ function shidouSmash() {
 
   fadeToClip('shidou_smash', false);
 
-  // 01→02 の境界＝頂点＝蹴り落としタイミング
-  shidouContactT  = c1.duration + SHIDOU_BLEND;
+  // ジャンプ頂点は 01→02 の切替に合わせる。蹴り落とし（打ち出し）はキックモーションが
+  // 当たる motion2 の少し後（SHIDOU_HIT_FRAC）まで遅らせ、それまではボールを腹で保持。
   shidouJumpTotal = combo.duration;
-  shidouJumpPeak  = shidouContactT;
+  shidouJumpPeak  = c1.duration + SHIDOU_BLEND;
+  shidouContactT  = c1.duration + SHIDOU_BLEND + c2.duration * SHIDOU_HIT_FRAC;
   shidouJumpTimer = shidouJumpTotal;
   shidouSmashed   = false;
 
