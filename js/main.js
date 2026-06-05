@@ -622,29 +622,26 @@ function chigiriBoost() {
   chigiriBoostTimer = combo ? combo.duration : 1.8;
 }
 
-// 蜂楽: その場フェイント(motion1)→急加速(motion2)のドリブル突破。
+// 蜂楽: 急加速(motion2)のみのドリブル突破。
 // 黄オーラをまとい、発動時に周囲にいる敵を「！」でフリーズ。奪取不可。
 const BACHIRA_BLEND      = 0.1;
 const BACHIRA_DASH_SPEED = 18;  // motion2 の前方ダッシュ速度
 const BACHIRA_FREEZE_RAD = 9;   // この範囲の敵をフリーズ
 function bachiraDash() {
   if (ballOwner !== 'player' || bachiraSkillTimer > 0) return;
-  if (!clips['bachira_dash'] && clips['bachira01'] && clips['bachira02']) {
-    buildComboClip('bachira_dash', ['bachira01', 'bachira02'], BACHIRA_BLEND);
-  }
-  const combo = clips['bachira_dash'], c1 = clips['bachira01'];
-  if (!combo || !c1) return;
-  bachiraSkillTotal = combo.duration;
-  bachiraSkillTimer = combo.duration;
-  bachiraDashStart  = c1.duration + BACHIRA_BLEND; // ここから motion2＝急加速
-  fadeToClip('bachira_dash', false);               // 連結モーションを1回再生
+  const c2 = clips['bachira02'];
+  if (!c2) return;
+  bachiraSkillTotal = c2.duration;
+  bachiraSkillTimer = c2.duration;
+  bachiraDashStart  = 0;            // 最初から急加速（01フェイントは無し）
+  fadeToClip('bachira02', false);   // motion2 を1回再生
 
   // 発動時に周囲にいる敵をモーション中ずっとフリーズ＋「！」マーク
   if (hasEnemy && enemy) {
     const d = new THREE.Vector3().subVectors(enemy.position, player.position).setY(0).length();
     if (d < BACHIRA_FREEZE_RAD) {
-      enemyStunTimer = combo.duration;
-      spawnStunMark(enemy, combo.duration, _exclaimTexture);
+      enemyStunTimer = c2.duration;
+      spawnStunMark(enemy, c2.duration, _exclaimTexture);
     }
   }
 }
