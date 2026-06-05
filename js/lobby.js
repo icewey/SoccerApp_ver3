@@ -59,6 +59,15 @@ const CHARACTERS = [
     color: '#ff66aa',
     available: true,
   },
+  {
+    id: 'bachira',
+    name: '蜂楽的キャラ',
+    number: '8',
+    fbx: './キャラ/蜂楽的なキャラ/T-Pose.fbx',
+    portrait: './キャラ/蜂楽的なキャラ/ベースイラスト/正面.png',
+    color: '#ffd400',
+    available: true,
+  },
 ];
 
 let selectedIdx = 0;

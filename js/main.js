@@ -269,7 +269,8 @@ function startKick(lofted, curve, power) {
   isKicking = true;
   kickTimer = clips['kick'].duration + 0.1; // finished取りこぼし時の保険
   fadeToClip('kick', false);
-  setTimeout(() => kickBall(lofted, curve, power), clips['kick'].duration * 0.55 * 1000);
+  // 蹴ってからボールが飛ぶまでのラグを短縮（足が振り出す辺り＝0.3で発射）。
+  setTimeout(() => kickBall(lofted, curve, power), clips['kick'].duration * 0.3 * 1000);
 }
 
 // ── シュートのチャージ（ボタン押下中に威力を溜める）────────────────────────
@@ -337,10 +338,14 @@ const SKILL_BY_CHAR = {
   nagi:    'fake_volley',   // 凪: 2段式フェイクボレー（黒エフェクト）
   barou:   'barou_curve',   // 馬狼: ほんの少し曲がる強烈カーブ（赤黒エフェクト）
   chigiri: 'chigiri_boost', // 千切: ドリブル突破・加速（ピンクエフェクト）
+  bachira: 'bachira_dash',  // 蜂楽: その場フェイント→急加速（黄エフェクト・周囲の敵をフリーズ）
 };
 let playerSkill  = 'spin';
 let skillSession = 0; // スキル中の stale setTimeout を無効化するカウンタ
 let chigiriBoostTimer = 0; // 千切ブースト残り時間（>0で加速・奪取不可・ピンク残像）
+let bachiraSkillTimer = 0; // 蜂楽スキル残り時間（>0で操作ロック・奪取不可・黄オーラ）
+let bachiraSkillTotal = 0;
+let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
 
 // スキルボタン/キーの共通エントリ。所持スキルに応じて分岐。
 function useSkill() {
@@ -349,6 +354,7 @@ function useSkill() {
   if      (playerSkill === 'fake_volley')   nagiFakeVolley();
   else if (playerSkill === 'barou_curve')   barouCurveShot();
   else if (playerSkill === 'chigiri_boost') chigiriBoost();
+  else if (playerSkill === 'bachira_dash')  bachiraDash();
   else startSpin(); // デフォルト: スピン（ドリブル中のみ・内部でガード）
 }
 
@@ -456,6 +462,46 @@ function chigiriBoost() {
   }
   const combo = clips['chigiri_run'];
   chigiriBoostTimer = combo ? combo.duration : 1.8;
+}
+
+// 蜂楽: その場フェイント(motion1)→急加速(motion2)のドリブル突破。
+// 黄オーラをまとい、発動時に周囲にいる敵を「！」でフリーズ。奪取不可。
+const BACHIRA_BLEND      = 0.1;
+const BACHIRA_DASH_SPEED = 18;  // motion2 の前方ダッシュ速度
+const BACHIRA_FREEZE_RAD = 9;   // この範囲の敵をフリーズ
+function bachiraDash() {
+  if (ballOwner !== 'player' || bachiraSkillTimer > 0) return;
+  if (!clips['bachira_dash'] && clips['bachira01'] && clips['bachira02']) {
+    buildComboClip('bachira_dash', ['bachira01', 'bachira02'], BACHIRA_BLEND);
+  }
+  const combo = clips['bachira_dash'], c1 = clips['bachira01'];
+  if (!combo || !c1) return;
+  bachiraSkillTotal = combo.duration;
+  bachiraSkillTimer = combo.duration;
+  bachiraDashStart  = c1.duration + BACHIRA_BLEND; // ここから motion2＝急加速
+  fadeToClip('bachira_dash', false);               // 連結モーションを1回再生
+
+  // 発動時に周囲にいる敵をモーション中ずっとフリーズ＋「！」マーク
+  if (hasEnemy && enemy) {
+    const d = new THREE.Vector3().subVectors(enemy.position, player.position).setY(0).length();
+    if (d < BACHIRA_FREEZE_RAD) {
+      enemyStunTimer = combo.duration;
+      spawnStunMark(enemy, combo.duration, _exclaimTexture);
+    }
+  }
+}
+
+function updateBachira(dt) {
+  if (bachiraSkillTimer <= 0) return;
+  const elapsed = bachiraSkillTotal - bachiraSkillTimer;
+  bachiraSkillTimer -= dt;
+  // motion1 はその場（自動移動なし）。motion2 区間で前方へ一気に加速。
+  if (elapsed >= bachiraDashStart) {
+    const f = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+    player.position.addScaledVector(f, BACHIRA_DASH_SPEED * dt);
+    player.position.y = groundY;
+    charClampToField(playerChar);
+  }
 }
 
 // ── 敵シュート（charShoot を使用）────────────────────────────────────────
@@ -569,7 +615,7 @@ function updateEnemy(dt) {
   // 千切ブースト中(chigiriBoostTimer>0)はプレイヤーからは奪えない。
   if (enemyTackling && ballOwner !== 'enemy' && distToBall < TACKLE_DIST
       && enemyPickupCooldown <= 0 && !isKicking && gkBallHolder === 'none'
-      && !(ballOwner === 'player' && chigiriBoostTimer > 0)) {
+      && !(ballOwner === 'player' && (chigiriBoostTimer > 0 || bachiraSkillTimer > 0))) {
     const stolen = ballOwner === 'player';
     ballOwner = 'enemy';
     playerPickupCooldown = 0.6;
@@ -642,8 +688,8 @@ function updateEnemy(dt) {
 // マルチプレイでも常に呼ぶ。物理シミュとゴール判定は含まない。
 function updateLocalPlayerBall(dt) {
   if (!gameStarted || isGoalScene || gkBallHolder !== 'none') return;
-  // 千切ブースト中は奪われず保持し続ける（シュート中は除く）
-  if (chigiriBoostTimer > 0 && !isKicking) {
+  // 千切ブースト/蜂楽スキル中は奪われず保持し続ける（シュート中は除く）
+  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0) && !isKicking) {
     ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); return;
   }
 
@@ -699,8 +745,8 @@ function updateBall(dt) {
   if (!gameStarted) return;
   if (isGoalScene) return; // ゴールシーン中は物理停止
   if (gkBallHolder !== 'none') { isDribbling = false; return; }
-  // 千切ブースト中は奪われず保持し続ける（シュート中は除く）
-  if (chigiriBoostTimer > 0 && !isKicking) {
+  // 千切ブースト/蜂楽スキル中は奪われず保持し続ける（シュート中は除く）
+  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0) && !isKicking) {
     ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); return;
   }
 
@@ -1261,6 +1307,7 @@ function mpResetAfterGoal() {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
+  bachiraSkillTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -1283,6 +1330,7 @@ function resetAfterGoal(scorer) {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
+  bachiraSkillTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -1396,6 +1444,7 @@ function pkPlaceForKick() {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
+  bachiraSkillTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -1482,6 +1531,9 @@ const ANIM_FILES = [
   // 千切の固有スキル「ドリブル突破（加速）」用（連結して使う）
   ['chigiri01', './animations/千切スキル加速/BoostRun01.fbx'],
   ['chigiri02', './animations/千切スキル加速/BoostRun02.fbx'],
+  // 蜂楽の固有スキル「ドリブル突破（その場フェイント→急加速）」用（連結して使う）
+  ['bachira01', './animations/蜂楽ドリブル突破/bachiraドリブル01.fbx'],
+  ['bachira02', './animations/蜂楽ドリブル突破/bachiraドリブル02.fbx'],
 ];
 let CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ（敵追加時はstartGame内で+1）
 let coreReady = 0;
@@ -1632,6 +1684,7 @@ export function startGame(config) {
   playerSkill = SKILL_BY_CHAR[config.charId] || 'spin';
   skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
+  bachiraSkillTimer = 0;
   resetBallTrail();
   clearCharFx();
   cancelCharge();
@@ -1939,6 +1992,7 @@ const LEAD_MIN_MOVE = 0.01; // この移動量(/frame)未満は停止扱い→�
 
 function getDesiredAnim() {
   if (isKicking || isPassing || isTackling) return null;
+  if (bachiraSkillTimer > 0) return null; // 蜂楽スキルは専用クリップを再生中（上書きしない）
   if (chigiriBoostTimer > 0 && clips['chigiri_run']) return 'chigiri_run'; // 千切ブースト走（ループ）
   if (isSpinning && isDribbling) return 'spin';
   const fwd    = keys.has('KeyW') || keys.has('ArrowUp');
@@ -1956,22 +2010,23 @@ function getDesiredAnim() {
 
 // ── ‼️ スタンマーク（ボールを奪われた側の頭上に出す）────────────────────────
 const stunMarks = [];
-function makeStunTexture() {
+function makeStunTexture(symbol) {
   const cv = document.createElement('canvas');
   cv.width = cv.height = 128;
   const ctx = cv.getContext('2d');
   ctx.font = 'bold 104px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('‼️', 64, 74);
+  ctx.fillText(symbol, 64, 74);
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
-const _stunTexture = makeStunTexture(); // 全マーク共通（使い回す）
+const _stunTexture    = makeStunTexture('‼️'); // タックル奪取で奪われた側
+const _exclaimTexture = makeStunTexture('❗'); // 蜂楽スキルで固まった敵
 
-function spawnStunMark(targetGroup, duration) {
-  const mat = new THREE.SpriteMaterial({ map: _stunTexture, transparent: true, depthTest: false });
+function spawnStunMark(targetGroup, duration, texture = _stunTexture) {
+  const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
   const sp  = new THREE.Sprite(mat);
   sp.scale.set(1.1, 1.1, 1.1);
   sp.renderOrder = 999;
@@ -2173,10 +2228,14 @@ function updateCharFx(dt) {
       _auraTimer = 0;
       if (playerSkill === 'fake_volley') spawnAuraParticle(player, 0x0a0a0a, THREE.NormalBlending);
       if (chigiriBoostTimer > 0)          spawnAuraParticle(player, 0xff3399, THREE.NormalBlending);
+      if (bachiraSkillTimer > 0)          spawnAuraParticle(player, 0xffd400, THREE.NormalBlending);
     }
     if (chigiriBoostTimer > 0) {
       _ghostTimer += dt;
       if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xff3399); }
+    } else if (bachiraSkillTimer > 0) {
+      _ghostTimer += dt;
+      if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xffd400); }
     }
   }
 
@@ -2295,6 +2354,7 @@ function animate() {
   updateStunMarks(dt);
   updateCharge(dt);
   updateCharFx(dt);
+  if (gameStarted && !isGoalScene) updateBachira(dt);
 
   if (gameStarted) {
   if (!isGoalScene) {
@@ -2303,7 +2363,7 @@ function animate() {
     const anim = playerStunTimer > 0 ? 'idle' : getDesiredAnim();
     if (anim) fadeToClip(anim);
 
-    if (playerStunTimer <= 0 && !isKicking && !isPassing && !isTackling && !isSpinning) {
+    if (playerStunTimer <= 0 && bachiraSkillTimer <= 0 && !isKicking && !isPassing && !isTackling && !isSpinning) {
       // 視線回転: Q/E キー
       if (keys.has('KeyQ')) viewAngle += TURN_SPEED * dt;
       if (keys.has('KeyE')) viewAngle -= TURN_SPEED * dt;
