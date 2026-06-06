@@ -392,10 +392,25 @@ let bachiraSkillTimer = 0; // 蜂楽スキル残り時間（>0で操作ロック
 let bachiraSkillTotal = 0;
 let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
 
+// スキル発動中フラグの“署名”。dispatch前後で変化したら＝スキルが実際に発動した、と判定。
+// （ドリブル外でのスピン等、内部ガードで不発のときはチャージを消費しないため）
+function skillActiveSig() {
+  return (isSpinning ? '1' : '0')
+    + (isKicking ? '1' : '0')
+    + (chigiriBoostTimer > 0 ? '1' : '0')
+    + (bachiraSkillTimer > 0 ? '1' : '0')
+    + (shidouJumpTimer  > 0 ? '1' : '0');
+}
+
 // スキルボタン/キーの共通エントリ。所持スキルに応じて分岐。
+// 1試合に MAX_SKILL_CHARGES 回まで（PK戦は対象外）。
 function useSkill() {
-  if (!gameStarted || isGoalScene || playerStunTimer > 0) return;
+  if (!gameStarted || isGoalScene || matchOver || playerStunTimer > 0) return;
   if (isKicking || isPassing || isTackling) return;
+  const limited = !isPK;
+  if (limited && skillCharges <= 0) { flashNoCharge(); return; }
+
+  const before = skillActiveSig();
   if      (playerSkill === 'fake_volley')   nagiFakeVolley();
   else if (playerSkill === 'barou_curve')   barouCurveShot();
   else if (playerSkill === 'chigiri_boost') chigiriBoost();
@@ -403,6 +418,12 @@ function useSkill() {
   else if (playerSkill === 'reo_copy')      reoCopySkill();
   else if (playerSkill === 'shidou_smash')  shidouSmash();
   else startSpin(); // デフォルト: スピン（ドリブル中のみ・内部でガード）
+
+  // 実際に発動したときだけ1チャージ消費
+  if (limited && skillActiveSig() !== before) {
+    skillCharges = Math.max(0, skillCharges - 1);
+    renderSkillCharges();
+  }
 }
 
 // 玲王: 近く(REO_COPY_RAD内)にいる敵CPUの固有スキルをコピーして発動する。
@@ -1083,6 +1104,12 @@ let groundY     = 0;
 let playerScore = 0;
 let cpuScore    = 0;
 let isGoalScene = false;
+let matchOver   = false;          // 5点先取で試合終了（リザルト表示中）
+const MATCH_TARGET = 5;           // 何点先取で終了か
+
+// ── スキルチャージ（1試合に使える回数） ───────────────────────────────────
+const MAX_SKILL_CHARGES = 3;
+let skillCharges = MAX_SKILL_CHARGES;
 
 // ── PKモード ────────────────────────────────────────────────────────────────
 let isPK        = false;     // PK戦モードか
@@ -1416,10 +1443,57 @@ const goalSubText   = document.getElementById('goal-sub-text');
 const pkHudEl       = document.getElementById('pk-hud');
 const pkCountEl     = document.getElementById('pk-count');
 const pkResultEl    = document.getElementById('pk-result');
-if (pkResultEl) {
-  const pkRetry = e => { e.preventDefault(); if (isPK && pkState === 'done') pkRestart(); };
-  pkResultEl.addEventListener('click', pkRetry);
-  pkResultEl.addEventListener('touchstart', pkRetry, { passive: false });
+
+// ── スキルチャージHUD（右上キューブ×3） ──────────────────────────────────
+const skillChargesEl = document.getElementById('skill-charges');
+const scCubes = skillChargesEl ? [...skillChargesEl.querySelectorAll('.sc-cube')] : [];
+function renderSkillCharges() {
+  scCubes.forEach((cube, i) => cube.classList.toggle('spent', i >= skillCharges));
+}
+function flashNoCharge() {
+  if (!skillChargesEl) return;
+  skillChargesEl.classList.remove('empty-flash');
+  void skillChargesEl.offsetWidth; // reflowでアニメ再起動
+  skillChargesEl.classList.add('empty-flash');
+}
+
+// ── 試合結果オーバーレイ（リトライ / ロビーに戻る） ───────────────────────
+const matchResultEl = document.getElementById('match-result');
+let onMatchRetry = null;          // モード別のリトライ処理
+function showMatchResult({ title, cls, scoreText, sub, onRetry }) {
+  onMatchRetry = onRetry;
+  if (!matchResultEl) return;
+  if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
+  if (pkHudEl) pkHudEl.style.display = 'none';
+  if (skillChargesEl) skillChargesEl.style.display = 'none';
+  const t = matchResultEl.querySelector('#mr-title');
+  t.textContent = title;
+  t.className = cls || '';
+  matchResultEl.querySelector('#mr-score').textContent = scoreText || '';
+  matchResultEl.querySelector('#mr-sub').textContent   = sub || '';
+  matchResultEl.style.display = 'flex';
+}
+function hideMatchResult() {
+  if (matchResultEl) matchResultEl.style.display = 'none';
+}
+if (matchResultEl) {
+  matchResultEl.querySelector('#mr-retry').addEventListener('click', () => {
+    hideMatchResult();
+    onMatchRetry?.();
+  });
+  matchResultEl.querySelector('#mr-lobby').addEventListener('click', () => {
+    window.location.reload();      // ロビーへ戻る（確実な復帰）
+  });
+}
+
+// CPU戦 / 2vs2 の試合をその場で再開（モデル再読み込みなし）
+function restartMatch() {
+  playerScore = 0; cpuScore = 0; updateScoreDisplay();
+  skillCharges = MAX_SKILL_CHARGES; renderSkillCharges();
+  if (skillChargesEl && !isPK) skillChargesEl.style.display = 'flex';
+  matchOver = false;
+  isGoalScene = false;
+  resetAfterGoal('cpu');           // プレイヤーがキックオフして再開
 }
 
 function updateScoreDisplay() {
@@ -1611,6 +1685,19 @@ function scoreGoal(scorer) {
     mpHandlers.publishEvent({ type: 'goal', scorer: mpScorer, seq: lastGoalSeq });
     mpHandlers.publishScore({ host: playerScore, guest: cpuScore });
     setTimeout(() => { mpResetAfterGoal(); isGoalScene = false; }, 2500);
+  } else if (playerScore >= MATCH_TARGET || cpuScore >= MATCH_TARGET) {
+    // 5点先取で試合終了 → リザルト（リトライ / ロビー）。isGoalScene は維持して停止。
+    matchOver = true;
+    const win = playerScore > cpuScore;
+    setTimeout(() => {
+      showMatchResult({
+        title: win ? 'WIN!' : 'LOSE...',
+        cls:   win ? 'win'  : 'lose',
+        scoreText: `${playerScore} - ${cpuScore}`,
+        sub: win ? 'You reached 5 goals' : 'CPU reached 5 goals',
+        onRetry: restartMatch,
+      });
+    }, 2200);
   } else {
     setTimeout(() => { resetAfterGoal(scorer); isGoalScene = false; }, 2500);
   }
@@ -1686,15 +1773,20 @@ function pkResolve(result) {
 }
 
 function pkShowResult() {
-  if (!pkResultEl) { pkPlaceForKick(); return; }
-  const rank = pkGoals === PK_TOTAL ? 'PERFECT!' : pkGoals >= PK_TOTAL * 0.6 ? 'NICE!' : 'もう一度!';
-  pkResultEl.querySelector('#pk-result-score').textContent = `${pkGoals} / ${PK_TOTAL}`;
-  pkResultEl.querySelector('#pk-result-rank').textContent  = rank;
-  pkResultEl.style.display = 'flex';
+  const win = pkGoals === PK_TOTAL;
+  const rank = win ? 'PERFECT!' : pkGoals >= PK_TOTAL * 0.6 ? 'NICE!' : 'もう一度!';
+  showMatchResult({
+    title: rank,
+    cls:   win ? 'win' : pkGoals >= PK_TOTAL * 0.6 ? 'draw' : 'lose',
+    scoreText: `${pkGoals} / ${PK_TOTAL}`,
+    sub: 'PK戦',
+    onRetry: pkRestart,
+  });
 }
 
 function pkRestart() {
   if (pkResultEl) pkResultEl.style.display = 'none';
+  hideMatchResult();
   pkKick = 0; pkGoals = 0;
   pkRenderHud();
   pkPlaceForKick();
@@ -1951,6 +2043,11 @@ export function startGame(config) {
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.patrolPhase = 0;
   playerScore = 0; cpuScore = 0; updateScoreDisplay();
   isGoalScene = false;
+  matchOver = false;
+  hideMatchResult();
+  // スキルチャージを満タンに（HUDはPK以外で表示）
+  skillCharges = MAX_SKILL_CHARGES; renderSkillCharges();
+  if (skillChargesEl) skillChargesEl.style.display = config.pk ? 'none' : 'flex';
   // PKモード状態リセット
   isPK = !!config.pk;
   pkState = 'ready'; pkKick = 0; pkGoals = 0; pkLiveTimer = 0;
