@@ -1476,12 +1476,18 @@ function showMatchResult({ title, cls, scoreText, sub, onRetry }) {
 function hideMatchResult() {
   if (matchResultEl) matchResultEl.style.display = 'none';
 }
+// click と touchend の両方を結線（touchendはpreventDefaultでclick二重発火を抑止）
+function bindTap(el, fn) {
+  if (!el) return;
+  el.addEventListener('click', fn);
+  el.addEventListener('touchend', e => { e.preventDefault(); e.stopPropagation(); fn(); }, { passive: false });
+}
 if (matchResultEl) {
-  matchResultEl.querySelector('#mr-retry').addEventListener('click', () => {
+  bindTap(matchResultEl.querySelector('#mr-retry'), () => {
     hideMatchResult();
     onMatchRetry?.();
   });
-  matchResultEl.querySelector('#mr-lobby').addEventListener('click', () => {
+  bindTap(matchResultEl.querySelector('#mr-lobby'), () => {
     window.location.reload();      // ロビーへ戻る（確実な復帰）
   });
 }
@@ -3277,9 +3283,15 @@ document.addEventListener('gesturechange', e => e.preventDefault(), { passive: f
 
 // ▼ プニコン（仮想スティック）— 画面左半分のタッチで起動
 // ▼ 右半分スワイプ — 視線回転
+// ロビー or 試合結果オーバーレイ表示中はゲーム用タッチ処理を止める（ボタンのタップを通す）
+function gameTouchBlocked() {
+  if (document.getElementById('lobby')?.style?.display !== 'none') return true;
+  if (document.getElementById('match-result')?.style?.display === 'flex') return true;
+  return false;
+}
+
 document.addEventListener('touchstart', e => {
-  // ロビー表示中はゲーム用タッチ処理を無効化
-  if (document.getElementById('lobby')?.style?.display !== 'none') return;
+  if (gameTouchBlocked()) return;
   for (const t of e.changedTouches) {
     const isBtn = t.target.closest?.('.touch-btn');
     if (t.clientX < window.innerWidth * 0.5 && !joystick.active) {
@@ -3305,7 +3317,7 @@ document.addEventListener('touchstart', e => {
 }, { passive: false });
 
 document.addEventListener('touchmove', e => {
-  if (document.getElementById('lobby')?.style?.display !== 'none') return;
+  if (gameTouchBlocked()) return;
   e.preventDefault();
   for (const t of e.changedTouches) {
     if (t.identifier === joystick.id) {
