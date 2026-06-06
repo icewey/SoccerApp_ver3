@@ -2031,20 +2031,23 @@ const ANIM_FILES = [
   ['gk_catch',   './animations/Goalkeeper Catch.fbx'],
   ['gk_dive',    './animations/Goalkeeper Diving Save.fbx'],
   ['gk_throw',   './animations/Goalkeeper Overhand Throw.fbx'],
+  // ── 固有スキルのモーションは各キャラの「Skill」フォルダ配下に配置 ──
+  //   キャラ/<キャラ名>/Skill/<スキル名>/*.fbx
+  //   Skillフォルダが無い/中身が無いキャラは SKILL_BY_CHAR 未登録→既定のスピン。
   // 凪の固有スキル「2段式フェイクボレー」用（連結して使う）
-  ['fake01', './animations/2段式フェイクボレー/fakeKick_01.fbx'],
-  ['fake02', './animations/2段式フェイクボレー/fakeKick_02.fbx'],
+  ['fake01', './キャラ/凪的なキャラ/Skill/2段式フェイクボレー/fakeKick_01.fbx'],
+  ['fake02', './キャラ/凪的なキャラ/Skill/2段式フェイクボレー/fakeKick_02.fbx'],
   // 馬狼の固有スキル「カーブシュート」用
-  ['barou_shot', './animations/馬狼シュート/Strike Foward Jog.fbx'],
+  ['barou_shot', './キャラ/馬狼的なキャラ/Skill/馬狼シュート/Strike Foward Jog.fbx'],
   // 千切の固有スキル「ドリブル突破（加速）」用（連結して使う）
-  ['chigiri01', './animations/千切スキル加速/BoostRun01.fbx'],
-  ['chigiri02', './animations/千切スキル加速/BoostRun02.fbx'],
+  ['chigiri01', './キャラ/千切的なキャラ/Skill/千切スキル加速/BoostRun01.fbx'],
+  ['chigiri02', './キャラ/千切的なキャラ/Skill/千切スキル加速/BoostRun02.fbx'],
   // 蜂楽の固有スキル「ドリブル突破（その場フェイント→急加速）」用（連結して使う）
-  ['bachira01', './animations/蜂楽ドリブル突破/bachiraドリブル01.fbx'],
-  ['bachira02', './animations/蜂楽ドリブル突破/bachiraドリブル02.fbx'],
+  ['bachira01', './キャラ/蜂楽的なキャラ/Skill/蜂楽ドリブル突破/bachiraドリブル01.fbx'],
+  ['bachira02', './キャラ/蜂楽的なキャラ/Skill/蜂楽ドリブル突破/bachiraドリブル02.fbx'],
   // 士道の固有スキル「オーバーヘッド・スマッシュシュート」用（連結して使う）
-  ['shidou01', './animations/士道シュート/overhead01.fbx'],
-  ['shidou02', './animations/士道シュート/overhead02.fbx'],
+  ['shidou01', './キャラ/士道的なキャラ/Skill/士道シュート/overhead01.fbx'],
+  ['shidou02', './キャラ/士道的なキャラ/Skill/士道シュート/overhead02.fbx'],
 ];
 let CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ（敵追加時はstartGame内で+1）
 let coreReady = 0;
