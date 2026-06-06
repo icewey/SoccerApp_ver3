@@ -3436,10 +3436,10 @@ function ballTeamOf(key) {
   return null;
 }
 
-// プレイヤーチームでタッカー(プレイヤー)に最も近い味方（2v2は味方CPU優先、無ければGK）
+// プレイヤーチームでタッカー(プレイヤー)に最も近い味方（2v2は味方CPU。1v1は味方なし
+// → 前方スペースへ投げる/蹴る）。GKへの後ろ向きパスはしない。
 function nearestTeammateForPlayer() {
   if (mode2v2 && c2Ally) return c2Ally;
-  if (playerGKGroup && playerGKGroup.visible) return { key: 'player_gk', group: playerGKChar.group };
   return null;
 }
 // リスタート位置に最も近い敵エンティティ
@@ -3604,17 +3604,24 @@ function launchSetPieceBall(from, target, kind) {
   }
 }
 
-// CPUの蹴り手が3秒後に自動実行: 味方がいればパス、いなければドリブル開始。
+// CPUの蹴り手が3秒後に自動実行。
+//  スローイン: 必ずパス（味方へ。味方がいなければ前方スペースへ投げる。ドリブル禁止）。
+//  コーナー: 味方がいればパス、いなければドリブル開始。
 function cpuSetPieceAct() {
   const takerKey = setPiece.takerKey, kind = setPiece.kind;
   const taker = entity2(takerKey);
   const from  = taker.group.position;
-  const mate  = mode2v2 ? teammate2(takerKey) : null; // 1v1は味方なし→ドリブル
+  const mate  = mode2v2 ? teammate2(takerKey) : null;
   setPiece = null;
-  if (mate && mate.group) {
-    launchSetPieceBall(from, mate.group.position, kind);
+  const sgn = Math.sign(ballTeamOf(takerKey) === 'A' ? GOAL_X : -GOAL_X); // 攻撃方向
+  let target = (mate && mate.group) ? mate.group.position : null;
+  // スローインは必ずパス: 味方がいなければ前方スペースへ投げる
+  if (!target && kind === 'throwin') target = new THREE.Vector3(from.x + sgn * 10, 0, from.z * 0.4);
+  if (target) {
+    launchSetPieceBall(from, target, kind);
     playerPickupCooldown = 0.4; // 受け手(敵)が拾いやすいよう一瞬プレイヤーを抑える
   } else {
+    // コーナーで味方なし → ドリブル開始
     ballOwner = takerKey; isDribbling = false;
     if (!mode2v2) enemyState = 'dribble';
     playerPickupCooldown = 0.6;
