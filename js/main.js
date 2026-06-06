@@ -402,6 +402,7 @@ let chigiriBoostTimer = 0; // 千切ブースト残り時間（>0で加速・奪
 let bachiraSkillTimer = 0; // 蜂楽スキル残り時間（>0で操作ロック・奪取不可・黄オーラ）
 let bachiraSkillTotal = 0;
 let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
+let barouSkillTimer   = 0; // 馬狼スキル残り時間（>0で赤黒い稲妻エフェクト）
 
 // スキル発動中フラグの“署名”。dispatch前後で変化したら＝スキルが実際に発動した、と判定。
 // （ドリブル外でのスピン等、内部ガードで不発のときはチャージを消費しないため）
@@ -624,6 +625,7 @@ function barouCurveShot() {
   const tHit = clip.duration * BAROU_HIT_FRAC;
   // 接触＋フォロースルーで打ち切る（クリップ後半のジョグ＝2回目の振りを出さない）。
   kickTimer = tHit + BAROU_FOLLOW;
+  barouSkillTimer = tHit + BAROU_FOLLOW + 0.25; // 馬狼本体の赤黒い稲妻エフェクト
   fadeToClip('barou_shot', false);
   playerPickupCooldown = tHit + BAROU_FOLLOW; enemyPickupCooldown = tHit + BAROU_FOLLOW;
 
@@ -678,14 +680,40 @@ function bachiraDash() {
   }
 }
 
+// 入力（WASD/矢印/ジョイスティック）からカメラ相対のワールド移動ベクトルを返す。
+// 入力が無ければ長さ0。蜂楽スキルの操舵と通常移動の両方で利用。
+function computeMoveVec() {
+  const camDir   = new THREE.Vector3(-Math.sin(viewAngle), 0, -Math.cos(viewAngle));
+  const camRight = new THREE.Vector3( Math.cos(viewAngle), 0, -Math.sin(viewAngle));
+  const v = new THREE.Vector3();
+  if (keys.has('KeyW') || keys.has('ArrowUp'))    v.addScaledVector(camDir,    1);
+  if (keys.has('KeyS') || keys.has('ArrowDown'))  v.addScaledVector(camDir,   -1);
+  if (keys.has('KeyA') || keys.has('ArrowLeft'))  v.addScaledVector(camRight, -1);
+  if (keys.has('KeyD') || keys.has('ArrowRight')) v.addScaledVector(camRight,  1);
+  if (joystick.active) {
+    if (Math.abs(joystick.dy) > 0.05) v.addScaledVector(camDir,   -joystick.dy);
+    if (Math.abs(joystick.dx) > 0.05) v.addScaledVector(camRight,  joystick.dx);
+  }
+  return v;
+}
+
 function updateBachira(dt) {
   if (bachiraSkillTimer <= 0) return;
-  const elapsed = bachiraSkillTotal - bachiraSkillTimer;
   bachiraSkillTimer -= dt;
-  // motion1 はドリブル速度の半分で前進、motion2 区間で前方へ一気に加速。
-  const f = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
-  const speed = (elapsed >= bachiraDashStart) ? BACHIRA_DASH_SPEED : RUN_SPEED * 0.5;
-  player.position.addScaledVector(f, speed * dt);
+  // 方向キー入力があればその方向へ操舵（機体も向ける）。無ければ現在の向きへ直進。
+  const mv = computeMoveVec();
+  let dir;
+  if (mv.lengthSq() > 0.001) {
+    dir = mv.normalize();
+    const targetAngle = Math.atan2(-dir.x, -dir.z);
+    let diff = targetAngle - player.rotation.y;
+    while (diff >  Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+    player.rotation.y += diff * Math.min(1, 12 * dt); // 進行方向へ素早く旋回
+  } else {
+    dir = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+  }
+  player.position.addScaledVector(dir, BACHIRA_DASH_SPEED * dt);
   player.position.y = groundY;
   charClampToField(playerChar);
 }
@@ -1636,6 +1664,7 @@ function mpResetAfterGoal() {
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
+  barouSkillTimer = 0;
   shidouJumpTimer = 0;
   resetBallTrail();
   clearStunMarks();
@@ -1752,6 +1781,7 @@ function resetAfterGoal(scorer) {
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
+  barouSkillTimer = 0;
   shidouJumpTimer = 0;
   resetBallTrail();
   clearStunMarks();
@@ -1916,6 +1946,7 @@ function pkPlaceForKick() {
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
+  barouSkillTimer = 0;
   shidouJumpTimer = 0;
   resetBallTrail();
   clearStunMarks();
@@ -2171,6 +2202,7 @@ export function startGame(config) {
   skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
+  barouSkillTimer = 0;
   shidouJumpTimer = 0;
   resetBallTrail();
   clearCharFx();
@@ -2774,8 +2806,44 @@ function spawnCharGhost(color) {
   charGhosts.push({ mesh, life: 0, maxLife: 0.35, baseOp: 0.45 });
 }
 
+// ── 馬狼: 本体にまとう赤黒い稲妻エフェクト ─────────────────────────────────
+const barouBolts = [];
+let _barouBoltTimer = 0;
+function spawnBarouBolt() {
+  // プレイヤー本体に巻きつくように、地面〜頭上へ走るギザギザの稲妻を1本
+  const a  = Math.random() * Math.PI * 2;
+  const r  = 0.12 + Math.random() * 0.3;        // 体に近づける
+  const bx = player.position.x + Math.cos(a) * r;
+  const bz = player.position.z + Math.sin(a) * r;
+  const segs = 7;
+  const y0 = 0.05, y1 = 1.8 + Math.random() * 0.5;
+  const pts = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    pts.push(new THREE.Vector3(
+      bx + (Math.random() - 0.5) * 0.32,
+      y0 + (y1 - y0) * t,
+      bz + (Math.random() - 0.5) * 0.32
+    ));
+  }
+  const geom = new THREE.BufferGeometry().setFromPoints(pts);
+  // 赤黒: 鮮やかな赤を通常合成で（緑の芝でも赤く見える）、約3割を黒で混在
+  const black = Math.random() < 0.32;
+  const mat  = new THREE.LineBasicMaterial({
+    color: black ? 0x0a0000 : 0xff1414,
+    transparent: true,
+    opacity: black ? 0.9 : 1.0,
+    depthWrite: false,
+  });
+  const line = new THREE.Line(geom, mat);
+  line.renderOrder = 998;
+  scene.add(line);
+  barouBolts.push({ line, life: 0, maxLife: 0.06 + Math.random() * 0.09 });
+}
+
 function updateCharFx(dt) {
   if (chigiriBoostTimer > 0) chigiriBoostTimer -= dt;
+  if (barouSkillTimer > 0)   barouSkillTimer -= dt;
 
   // 発生: 凪=常時黒オーラ / 千切=ブースト中ピンクのオーラ＋残像
   if (gameStarted && !isGoalScene) {
@@ -2798,6 +2866,26 @@ function updateCharFx(dt) {
       if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xffd400); }
     }
     // 士道はゴースト残像なし。黄＆ピンクの水玉オーラのみ（上の spawnAuraParticle）。
+
+    // 馬狼スキル中: 本体に赤黒い稲妻を高速明滅で複数発生
+    if (barouSkillTimer > 0) {
+      _barouBoltTimer += dt;
+      if (_barouBoltTimer >= 0.025) {
+        _barouBoltTimer = 0;
+        const n = 3 + Math.floor(Math.random() * 3);
+        for (let k = 0; k < n; k++) spawnBarouBolt();
+      }
+    }
+  }
+
+  for (let i = barouBolts.length - 1; i >= 0; i--) {
+    const b = barouBolts[i];
+    b.life += dt;
+    b.line.material.opacity *= 0.80; // 明滅しながら消える
+    if (b.life >= b.maxLife) {
+      scene.remove(b.line); b.line.geometry.dispose(); b.line.material.dispose();
+      barouBolts.splice(i, 1);
+    }
   }
 
   for (let i = auraParticles.length - 1; i >= 0; i--) {
@@ -2821,7 +2909,8 @@ function updateCharFx(dt) {
 function clearCharFx() {
   for (const p of auraParticles) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); }
   for (const g of charGhosts)    { scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose(); }
-  auraParticles.length = 0; charGhosts.length = 0;
+  for (const b of barouBolts)    { scene.remove(b.line); b.line.geometry.dispose(); b.line.material.dispose(); }
+  auraParticles.length = 0; charGhosts.length = 0; barouBolts.length = 0;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
