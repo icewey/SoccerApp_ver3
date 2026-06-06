@@ -668,6 +668,55 @@
     }
     .mr-btn.mr-primary:hover { background: linear-gradient(135deg, #00e0ff, #0090ff); color: #04121a; }
 
+    /* ══ セットプレー（スローイン / コーナー）バー ══ */
+    #setpiece-bar {
+      position: fixed;
+      left: 50%;
+      bottom: 38px;
+      transform: translateX(-50%);
+      z-index: 95;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      pointer-events: none; /* タイトルは透過。ボタンだけ受ける */
+    }
+    #sp-title {
+      font-size: 0.95rem; font-weight: 800; letter-spacing: 6px;
+      color: #eaf6ff; text-transform: uppercase;
+      text-shadow: 0 0 16px rgba(0,200,255,0.6), 0 2px 6px rgba(0,0,0,0.6);
+      background: rgba(6,14,26,0.6);
+      border: 1px solid rgba(0,200,255,0.4);
+      border-radius: 8px; padding: 6px 18px;
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    }
+    #sp-btns { display: flex; gap: 16px; pointer-events: auto; }
+    .sp-btn {
+      position: relative; overflow: hidden;
+      background: rgba(255,255,255,0.06);
+      border: 1.6px solid rgba(255,255,255,0.3);
+      color: #fff;
+      padding: 16px 40px;
+      font-size: 1.05rem; font-weight: 800; letter-spacing: 5px;
+      cursor: pointer; font-family: inherit;
+      clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+      transition: all 0.2s;
+      touch-action: manipulation;
+    }
+    .sp-btn:hover { background: rgba(255,255,255,0.15); transform: translateY(-2px); }
+    .sp-btn:active { transform: translateY(0) scale(0.97); }
+    .sp-btn.sp-primary {
+      background: linear-gradient(135deg, rgba(0,210,255,0.32), rgba(0,130,255,0.18));
+      border-color: rgba(0,212,255,0.7); color: #eafbff;
+      box-shadow: 0 0 26px rgba(0,200,255,0.34);
+    }
+    .sp-btn.sp-primary:hover { background: linear-gradient(135deg, #00e0ff, #0090ff); color: #04121a; }
+    @media (max-width: 600px) {
+      #setpiece-bar { bottom: 24px; }
+      #sp-title { font-size: 0.78rem; letter-spacing: 4px; }
+      .sp-btn { padding: 14px 30px; font-size: 0.95rem; }
+    }
+
     #score-display {
       position: fixed;
       top: 14px;
@@ -1001,6 +1050,15 @@
         <button class="mr-btn mr-primary" id="mr-retry">リトライ</button>
         <button class="mr-btn" id="mr-lobby">ロビーに戻る</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ══ セットプレー（スローイン / コーナーキック） ══════════════════ -->
+  <div id="setpiece-bar">
+    <div id="sp-title">スローイン</div>
+    <div id="sp-btns">
+      <button class="sp-btn sp-primary" id="sp-pass">パス</button>
+      <button class="sp-btn" id="sp-dribble">ドリブル</button>
     </div>
   </div>
 

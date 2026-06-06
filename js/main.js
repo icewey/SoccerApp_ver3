@@ -1164,13 +1164,20 @@ function ballLoosePhysics(dt) {
     if      (ballMesh.position.x >  GOAL_X) { if (isPK) pkResolve('goal'); else scoreGoal('player'); return; }
     else if (ballMesh.position.x < -GOAL_X) { if (!isPK) scoreGoal('cpu'); return; }
   }
-  if (Math.abs(ballMesh.position.x) > FIELD_HALF_W + 1 && !(_inGoalZ && _inGoalY)) {
-    ballVel.x *= -0.6;
-    ballMesh.position.x = Math.sign(ballMesh.position.x) * (FIELD_HALF_W + 1);
-  }
-  if (Math.abs(ballMesh.position.z) > FIELD_HALF_D + 1) {
-    ballVel.z *= -0.6;
-    ballMesh.position.z = Math.sign(ballMesh.position.z) * (FIELD_HALF_D + 1);
+  // ── ライン割れ → セットプレー（1v1/2v2のみ）。ゴール枠内は除外（得点/捕捉）。──
+  if (setPieceEnabled()) {
+    if (Math.abs(ballMesh.position.z) > FIELD_HALF_D) { triggerThrowIn(); return; }
+    if (Math.abs(ballMesh.position.x) > GOAL_X && !(_inGoalZ && _inGoalY)) { triggerGoalLineOut(); return; }
+  } else {
+    // PK/マルチ用フォールバック: 従来どおり壁でバウンド
+    if (Math.abs(ballMesh.position.x) > FIELD_HALF_W + 1 && !(_inGoalZ && _inGoalY)) {
+      ballVel.x *= -0.6;
+      ballMesh.position.x = Math.sign(ballMesh.position.x) * (FIELD_HALF_W + 1);
+    }
+    if (Math.abs(ballMesh.position.z) > FIELD_HALF_D + 1) {
+      ballVel.z *= -0.6;
+      ballMesh.position.z = Math.sign(ballMesh.position.z) * (FIELD_HALF_D + 1);
+    }
   }
 
   const hspeed = Math.sqrt(ballVel.x ** 2 + ballVel.z ** 2);
@@ -1197,6 +1204,13 @@ window.addEventListener('keydown', e => {
 
   // PK結果画面: 任意キーで再挑戦
   if (isPK && pkState === 'done' && !e.repeat) { pkRestart(); return; }
+
+  // セットプレー中はパス/ドリブルのみ受け付け（移動・他アクションは無効）
+  if (gameStarted && setPiece && !e.repeat) {
+    if (e.code === 'KeyG' || e.code === 'KeyF') setPiecePass();
+    else if (e.code === 'KeyB') setPieceDribble();
+    return;
+  }
 
   // ワンショット動作はkeydownで即トリガー（animate()ループを待たない）
   if (gameStarted && !e.repeat) {
@@ -1811,6 +1825,7 @@ function updateGoalCapture(dt) {
 
 function resetAfterGoal(scorer) {
   goalCapture = null; restoreAllNets();   // ゴール時のネットへこみを元に戻す
+  setPiece = null; hideSetPieceUI();      // セットプレー中断状態をクリア
   ballMesh.position.set(0, BALL_R, 0);
   ballVel.set(0, 0, 0);
   ballCurveRate = 0;
@@ -2092,6 +2107,9 @@ const ANIM_FILES = [
   ['shidou02', './キャラ/士道的なキャラ/Skill/士道シュート/overhead02.fbx'],
   // カイザーの固有スキル「超高速ストレートシュート」用
   ['kaizer_impact', './キャラ/カイザー的なキャラ/Skill/kaizer_Impact.fbx'],
+  // セットプレー用（スローイン / コーナーキック）
+  ['throw_in',    './animations/Throw In.fbx'],
+  ['corner_kick', './animations/CornerKick.fbx'],
 ];
 let CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ（敵追加時はstartGame内で+1）
 let coreReady = 0;
@@ -2302,6 +2320,7 @@ export function startGame(config) {
   isGoalScene = false;
   matchOver = false;
   goalCapture = null;   // ゴール捕捉状態をクリア（ネットはbuildFieldで再生成され初期形）
+  setPiece = null; lastTouchTeam = null; hideSetPieceUI(); // セットプレー状態クリア
   hideMatchResult();
   // スキルチャージを満タンに（HUDはPK以外で表示）
   skillCharges = MAX_SKILL_CHARGES; renderSkillCharges();
@@ -3389,6 +3408,192 @@ function update2v2Defend(c, defendGoalX, dt) {
   charAnim(c.char, moving ? 'run' : 'idle');
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// ── セットプレー（スローイン / コーナーキック / ゴールキック）────────────────
+// 実サッカー同様、ボールがラインを割ったらプレイを中断。最後に触れたチームの
+// 相手にリスタート権。タッチライン=スローイン、ゴールライン=守備側が最後に
+// 触れたらコーナー／攻撃側が最後ならゴールキック(GK保持)。プレイヤーチームの
+// スロー/コーナーのみボタンUI（パス/ドリブル）で操作。相手・GKは自動再開。
+// 1v1/2v2 専用（PK・マルチは従来どおり壁バウンド）。
+let lastTouchTeam = null;        // 'A'(プレイヤー側) | 'B'(敵側)
+let setPiece = null;             // { kind:'throwin'|'corner' } プレイヤーが蹴る時のみ
+function setPieceEnabled() {
+  return !isPK && !isMultiplayer && !isGoalScene && !matchOver && !goalCapture && !setPiece;
+}
+function ballTeamOf(key) {
+  if (key === 'player' || key === 'ally'  || key === 'player_gk') return 'A';
+  if (key === 'enemy'  || key === 'enemy2'|| key === 'enemy_gk')  return 'B';
+  return null;
+}
+
+// プレイヤーチームでタッカー(プレイヤー)に最も近い味方（2v2は味方CPU優先、無ければGK）
+function nearestTeammateForPlayer() {
+  if (mode2v2 && c2Ally) return c2Ally;
+  if (playerGKGroup && playerGKGroup.visible) return { key: 'player_gk', group: playerGKChar.group };
+  return null;
+}
+// リスタート位置に最も近い敵エンティティ
+function nearestEnemyEntity(spot) {
+  const list = mode2v2 ? [c2Enemy, c2Enemy2] : (hasEnemy ? [{ key: 'enemy', group: enemy }] : []);
+  let best = null, bd = Infinity;
+  for (const e of list) {
+    const d = distXZ(e.group.position, spot);
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+function clearBallMotion() { ballVel.set(0, 0, 0); ballCurveRate = 0; ballOwner = 'none'; isDribbling = false; }
+
+// ── 発生: タッチライン → スローイン ────────────────────────────────────────
+function triggerThrowIn() {
+  const zSign = Math.sign(ballMesh.position.z) || 1;
+  const xPos  = Math.max(-(FIELD_HALF_W - 1), Math.min(FIELD_HALF_W - 1, ballMesh.position.x));
+  const awarded = lastTouchTeam === 'A' ? 'B' : 'A'; // 最後に触れた逆チームがスロー
+  const spot = { x: xPos, z: zSign * (FIELD_HALF_D - 0.4) };
+  clearBallMotion();
+  ballMesh.position.set(spot.x, BALL_R, spot.z);
+  if (awarded === 'A') startPlayerSetPiece('throwin', spot, -zSign);
+  else                 startOpponentRestart(spot);
+}
+
+// ── 発生: ゴールライン(枠外) → コーナー or ゴールキック ─────────────────────
+function triggerGoalLineOut() {
+  const xSign = Math.sign(ballMesh.position.x) || 1;
+  const zSign = Math.sign(ballMesh.position.z) || 1;
+  const defending = xSign > 0 ? 'B' : 'A';            // この線を守るチーム
+  const attacking = defending === 'A' ? 'B' : 'A';
+  clearBallMotion();
+  if (lastTouchTeam === defending) {
+    // 守備側が最後に触れた → 攻撃側のコーナーキック
+    const spot = { x: xSign * (FIELD_HALF_W - 0.5), z: zSign * (FIELD_HALF_D - 0.5) };
+    ballMesh.position.set(spot.x, BALL_R, spot.z);
+    if (attacking === 'A') startPlayerSetPiece('corner', spot, xSign);
+    else                   startOpponentRestart(spot);
+  } else {
+    // 攻撃側が最後に触れた（or 不明） → 守備側ゴールキック（GK保持スタート）
+    startGoalKick(defending);
+  }
+}
+
+function startPlayerSetPiece(kind, spot, faceSign) {
+  setPiece = { kind };
+  player.position.set(spot.x, groundY, spot.z);
+  player.rotation.y = faceSign >= 0 ? -Math.PI / 2 : Math.PI / 2; // ピッチ内側/ゴール方向へ
+  ballOwner = 'none'; isDribbling = false;
+  isKicking = isPassing = isTackling = isSpinning = false;
+  ballMesh.position.set(spot.x, BALL_R, spot.z);
+  if (mixer) fadeToClip('idle');
+  showSetPieceUI(kind);
+}
+
+function startOpponentRestart(spot) {
+  const e = nearestEnemyEntity(spot);
+  ballMesh.position.set(spot.x, BALL_R, spot.z);
+  if (e) {
+    e.group.position.set(spot.x, groundY, spot.z);
+    ballOwner = e.key;
+    if (!mode2v2) enemyState = 'dribble';
+    playerPickupCooldown = 0.8;
+  } else {
+    ballOwner = 'none';
+  }
+  lastTouchTeam = ballTeamOf(ballOwner) || lastTouchTeam;
+}
+
+function startGoalKick(team) {
+  ballOwner = 'none'; ballVel.set(0, 0, 0); ballCurveRate = 0; isDribbling = false;
+  if (team === 'A') {
+    const gy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
+    playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), gy, 0);
+    gkBallHolder = 'player_gk'; pGKSt.state = 'hold'; pGKSt.holdTimer = GK_HOLD_TIME; pGKSt.catchAnimTimer = 0;
+    ballMesh.position.set(playerGKChar.group.position.x, 1.2, 0);
+  } else {
+    const gy = enemyGKChar.group.userData.gkGroundOffset ?? groundY;
+    enemyGKChar.group.position.set(GOAL_X - GK_X_OFFSET, gy, 0);
+    gkBallHolder = 'enemy_gk'; eGKSt.state = 'hold'; eGKSt.holdTimer = GK_HOLD_TIME; eGKSt.catchAnimTimer = 0;
+    ballMesh.position.set(enemyGKChar.group.position.x, 1.2, 0);
+  }
+  lastTouchTeam = team;
+}
+
+// プレイヤーのセットプレー中: ボールを足元に保持し続ける（フリーズ）
+function updateSetPieceHold() {
+  ballMesh.position.set(player.position.x, BALL_R, player.position.z);
+  ballVel.set(0, 0, 0);
+}
+
+// ── パス（プレイヤーのスロー/コーナー）────────────────────────────────────
+function setPiecePass() {
+  if (!setPiece) return;
+  const kind = setPiece.kind;
+  const mate = nearestTeammateForPlayer();
+  hideSetPieceUI();
+  const clipName = kind === 'corner' ? 'corner_kick' : 'throw_in';
+  const dur = clips[clipName] ? clips[clipName].duration : 1.0;
+  const contact = Math.min(0.6, dur * 0.3); // 長尺クリップは接触で打ち切る
+  isKicking = true; kickTimer = contact + 0.4;
+  if (clips[clipName] && mixer) fadeToClip(clipName, false);
+  const target = mate
+    ? mate.group.position.clone()
+    : new THREE.Vector3(player.position.x + (player.rotation.y < 0 ? 8 : -8), 0, player.position.z);
+  setPiece = null; // フリーズ解除（モーションは isKicking で継続）
+  const sess = ++skillSession;
+  setTimeout(() => {
+    if (sess !== skillSession || !gameStarted) return;
+    const from = player.position;
+    const dir  = new THREE.Vector3(target.x - from.x, 0, target.z - from.z);
+    const dist = Math.max(1, dir.length()); dir.normalize();
+    ballOwner = 'none'; isDribbling = false;
+    if (kind === 'corner') {
+      const hSpd = Math.min(26, Math.max(14, dist * 0.95));
+      ballMesh.position.set(from.x + dir.x * 0.5, BALL_R + 0.1, from.z + dir.z * 0.5);
+      ballVel.set(dir.x * hSpd, 11, dir.z * hSpd);
+      ballCurveRate = (Math.random() < 0.5 ? 1 : -1) * 0.5; // カーブ軌道で蹴り上げ
+      setBallTrail([0x3da5ff], THREE.AdditiveBlending);
+    } else {
+      const hSpd = Math.min(18, Math.max(9, dist * 0.85));
+      ballMesh.position.set(from.x + dir.x * 0.4, 1.4, from.z + dir.z * 0.4);
+      ballVel.set(dir.x * hSpd, 7, dir.z * hSpd); // スローイン: ふわりと投げる
+      ballCurveRate = 0;
+    }
+    enemyPickupCooldown = 0.4; // 受け手が拾いやすいよう一瞬敵を抑える
+    lastTouchTeam = 'A';
+  }, contact * 1000);
+}
+
+// ── ドリブル（プレイヤーのコーナーのみ）────────────────────────────────────
+function setPieceDribble() {
+  if (!setPiece || setPiece.kind !== 'corner') return;
+  hideSetPieceUI();
+  setPiece = null;
+  ballOwner = 'player'; isDribbling = true;
+  enemyPickupCooldown = 0.6;
+  lastTouchTeam = 'A';
+}
+
+// ── UI（パス/ドリブルボタン）────────────────────────────────────────────────
+const _spBar     = document.getElementById('setpiece-bar');
+const _spTitle   = document.getElementById('sp-title');
+const _spPassBtn = document.getElementById('sp-pass');
+const _spDribBtn = document.getElementById('sp-dribble');
+const _touchControls = document.getElementById('touch-controls');
+const _uiLegend = document.getElementById('ui');
+function showSetPieceUI(kind) {
+  if (!_spBar) return;
+  _spTitle.textContent = kind === 'corner' ? 'コーナーキック' : 'スローイン';
+  _spDribBtn.style.display = kind === 'corner' ? 'flex' : 'none'; // スローインはパスのみ
+  _spBar.style.display = 'flex';
+  if (_touchControls) _touchControls.style.display = 'none'; // 通常操作ボタンは隠す
+  if (_uiLegend) _uiLegend.style.display = 'none';            // キーボード説明も隠す
+}
+function hideSetPieceUI() {
+  if (_spBar) _spBar.style.display = 'none';
+  if (_touchControls) _touchControls.style.display = ''; // 通常操作ボタンを戻す（CSSに委ねる）
+  if (_uiLegend) _uiLegend.style.display = '';
+}
+if (_spPassBtn) bindTap(_spPassBtn, () => setPiecePass());
+if (_spDribBtn) bindTap(_spDribBtn, () => setPieceDribble());
+
 const clock = new THREE.Clock();
 
 function animate() {
@@ -3403,7 +3608,10 @@ function animate() {
   const remoteRole = mpRole === 'host' ? 'guest' : 'host';
   const remoteOwns = isMultiplayer && mpRemoteBallOwner === remoteRole;
 
-  if (mode2v2) {
+  if (setPiece) {
+    // プレイヤーのセットプレー中: ボールを足元に保持してプレイを停止
+    updateSetPieceHold();
+  } else if (mode2v2) {
     // 2vs2: 所有権・CPU AI・ドリブル配置・ルーズ物理を update2v2 が一括処理
     update2v2(dt);
   } else if (isMultiplayer && remoteOwns) {
@@ -3435,7 +3643,15 @@ function animate() {
   // 相手がボールを手放した → 'enemy' を解放
   if (isMultiplayer && ballOwner === 'enemy' && !remoteOwns) ballOwner = 'none';
 
-  if (isPK) {
+  // 最後にボールに触れたチームを記録（ライン割れ時のリスタート権判定用）
+  if (!isMultiplayer && !isPK) {
+    if (ballOwner !== 'none')           lastTouchTeam = ballTeamOf(ballOwner) || lastTouchTeam;
+    else if (gkBallHolder !== 'none')   lastTouchTeam = ballTeamOf(gkBallHolder) || lastTouchTeam;
+  }
+
+  if (setPiece) {
+    // プレイヤーのセットプレー中はAI/GKを停止（フリーズ）
+  } else if (isPK) {
     // PK戦: 敵GKのみ守備、updatePKで進行管理（敵CPU・自陣GKは動かさない）
     updateGK(enemyGKChar, eGKSt, GOAL_X, enemyChar, 'enemy_gk', dt);
     updatePK(dt);
@@ -3496,11 +3712,11 @@ function animate() {
   if (gameStarted) {
   if (!isGoalScene) {
     if (playerStunTimer > 0) playerStunTimer -= dt;
-    // スタン中は入力に関わらず idle 固定（足踏み防止）
-    const anim = playerStunTimer > 0 ? 'idle' : getDesiredAnim();
+    // スタン中・セットプレー待ち中は idle 固定（足踏み防止）
+    const anim = (playerStunTimer > 0 || setPiece) ? 'idle' : getDesiredAnim();
     if (anim) fadeToClip(anim);
 
-    if (playerStunTimer <= 0 && bachiraSkillTimer <= 0 && !isKicking && !isPassing && !isTackling && !isSpinning) {
+    if (!setPiece && playerStunTimer <= 0 && bachiraSkillTimer <= 0 && !isKicking && !isPassing && !isTackling && !isSpinning) {
       // 視線回転: Q/E キー
       if (keys.has('KeyQ')) viewAngle += TURN_SPEED * dt;
       if (keys.has('KeyE')) viewAngle -= TURN_SPEED * dt;
@@ -3664,6 +3880,7 @@ document.addEventListener('gesturechange', e => e.preventDefault(), { passive: f
 function gameTouchBlocked() {
   if (document.getElementById('lobby')?.style?.display !== 'none') return true;
   if (document.getElementById('match-result')?.style?.display === 'flex') return true;
+  if (setPiece) return true; // セットプレー中はジョイスティック等を止めボタンタップを通す
   return false;
 }
 
