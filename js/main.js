@@ -844,6 +844,13 @@ function playerInSkill() {
   return isKicking || isPassing || isTackling || isSpinning
     || bachiraSkillTimer > 0 || chigiriBoostTimer > 0 || shidouJumpTimer > 0;
 }
+// スキルモーション中はボールを奪われない（隙をなくす）。ボール保持に関わる
+// スキル状態のみ（パス=手放す/タックル=非保持 は含めない）。
+function playerSkillBusy() {
+  return isSpinning || isKicking
+    || chigiriBoostTimer > 0 || bachiraSkillTimer > 0
+    || shidouJumpTimer > 0 || barouSkillTimer > 0;
+}
 function enemyInSkill() { return enemyKicking || enemyTackling; }
 function cpu2InSkill(c) { return c.kicking || c.passing || c.tackling || c.oneShotTimer > 0; }
 
@@ -923,10 +930,10 @@ function updateEnemy(dt) {
   const distToBall = new THREE.Vector3().subVectors(ballMesh.position, enemy.position).setY(0).length();
 
   // タックルによる奪取（プレイヤーと同じ TACKLE_DIST を使用）
-  // 千切ブースト中(chigiriBoostTimer>0)はプレイヤーからは奪えない。
+  // プレイヤーのスキルモーション中(playerSkillBusy)は奪えない（隙をなくす）。
   if (enemyTackling && ballOwner !== 'enemy' && distToBall < TACKLE_DIST
       && enemyPickupCooldown <= 0 && !isKicking && gkBallHolder === 'none'
-      && !(ballOwner === 'player' && (chigiriBoostTimer > 0 || bachiraSkillTimer > 0))) {
+      && !(ballOwner === 'player' && playerSkillBusy())) {
     const stolen = ballOwner === 'player';
     ballOwner = 'enemy';
     playerPickupCooldown = 0.6;
@@ -952,7 +959,7 @@ function updateEnemy(dt) {
     // タックル（プレイヤーと同じ距離で試みる）。キック中(enemyKicking)は
     // キックclipを中断して状態が固着するため開始しない。
     if (ballOwner === 'player' && distToBall < 3.0 && !enemyTackling && !enemyKicking
-        && enemyTackleCooldown <= 0) {
+        && enemyTackleCooldown <= 0 && !playerSkillBusy()) {
       enemyTackling = true;
       enemyTackleCooldown = ENEMY_TACKLE_COOLDOWN;
       enemyTackleTimer = clips['tackle'] ? clips['tackle'].duration + 0.1 : 1.0;
@@ -3248,6 +3255,8 @@ function update2v2(dt) {
 
 function update2v2Possession(dt) {
   const DR = DRIBBLE_DIST;
+  // 千切/蜂楽=保持し続ける（手放さない）。スピンや他スキルは手放し判定はそのまま
+  // だが、奪取は playerSkillBusy() で全面ブロックする。
   const skillHold = (chigiriBoostTimer > 0 || bachiraSkillTimer > 0);
   // 手放し: プレイヤー
   if (ballOwner === 'player') {
@@ -3275,7 +3284,7 @@ function update2v2Possession(dt) {
   for (const c of cpu2List) {
     if (!c.tackling || c.pickupCd > 0) continue;
     if (ballOwner === 'none' || sameTeam2(c.key, ballOwner)) continue;
-    if (ballOwner === 'player' && (skillHold || isKicking)) continue;
+    if (ballOwner === 'player' && playerSkillBusy()) continue; // スキル中は奪われない
     if (distXZ(ballMesh.position, c.group.position) >= TACKLE_DIST) continue;
     const victimKey = ballOwner;
     ballOwner = c.key;
@@ -3361,7 +3370,8 @@ function update2v2Defend(c, defendGoalX, dt) {
   let target;
   if (inMyZone && isClosestDefender2(c)) {
     target = new THREE.Vector3(ball.x, 0, ball.z); // プレス
-    if (ballOwner !== 'none' && !sameTeam2(c.key, ballOwner)) {
+    if (ballOwner !== 'none' && !sameTeam2(c.key, ballOwner)
+        && !(ballOwner === 'player' && playerSkillBusy())) { // スキル中のプレイヤーには仕掛けない
       const d = distXZ(ball, c.group.position);
       if (d < CPU_TACKLE_RANGE && c.tackleCd <= 0) {
         c.tackling = true; c.tackleCd = ENEMY_TACKLE_COOLDOWN;
