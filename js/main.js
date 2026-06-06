@@ -623,8 +623,8 @@ function updateShidouSkill(dt) {
 const YUKI_BLEND      = 0.1;
 const YUKI_MOVE_SPEED = 9;     // 01/02 のドリブル移動速度
 const YUKI_LOOP_R     = 2.0;   // 縦ループ（1回転）の半径(m)
-const YUKI_LOOP_DUR   = 0.6;   // 1回転の所要時間(s)
-const YUKI_LOOP_DRIFT = 4;     // ループ中の前進ドリフト(m/s)
+const YUKI_LOOP_DUR   = 0.7;   // 1回転の所要時間(s)
+const YUKI_LOOP_DRIFT = 11;    // ループ中の前進ドリフト(m/s)。大きいほど前進しながら描く（バネ伸ばし）
 const YUKI_EXIT_SPEED = 26;    // ループ後、前方への初速
 const YUKI_EXIT_VY    = 7;     // ループ後の上向き初速（ゴールへ伸びる弧）
 let yukiTimer = 0, yukiTotal = 0, yukiT1 = 0, yukiT2 = 0, yukiContactT = 0;
