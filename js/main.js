@@ -34,7 +34,12 @@ fillLight.position.set(-40, 30, -30);
 scene.add(fillLight);
 
 // ── Soccer Field ─────────────────────────────────────────────────────────
+// 各ゴールのネット変形ハンドル（buildFieldで作り直すたびに再登録）。
+// { sign:+1/-1, ox, backX, ghw, H, geom, rest:Float32Array }
+const goalNets = [];
+
 function buildField(halfW, halfD) {
+  goalNets.length = 0;
   const root   = new THREE.Group();
   const goalX  = halfW + 1.5;
   const totalW = goalX * 2;
@@ -101,7 +106,13 @@ function buildField(halfW, halfD) {
     for (let k=0;k<=3;k++) { const x=ox+(s*gdp/3)*k; seg(x,0,-HW,x,H,-HW); }
     for (let j=0;j<=5;j++) { const y=(H/5)*j;         seg(ox,y,HW,backX,y,HW); }
     for (let k=0;k<=3;k++) { const x=ox+(s*gdp/3)*k; seg(x,0,HW,x,H,HW); }
-    root.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), netMat));
+    const netGeom = new THREE.BufferGeometry().setFromPoints(pts);
+    root.add(new THREE.LineSegments(netGeom, netMat));
+    // ゴール時にボールでへこませるための変形ハンドルを登録
+    goalNets.push({
+      sign: s, ox, backX, ghw: HW, H, geom: netGeom,
+      rest: netGeom.attributes.position.array.slice(),
+    });
   });
   return root;
 }
@@ -918,6 +929,7 @@ function updateLocalPlayerBall(dt) {
 
 function updateBall(dt) {
   if (!gameStarted) return;
+  if (goalCapture) return;  // ゴール捕捉中は updateGoalCapture がボールを駆動
   if (isGoalScene) return; // ゴールシーン中は物理停止
   if (gkBallHolder !== 'none') { isDribbling = false; return; }
   // 千切ブースト/蜂楽スキル中は奪われず保持し続ける（シュート中は除く）
@@ -1573,7 +1585,99 @@ function mpResetAfterGoal() {
   if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
 }
 
+// ── ゴール時のボール捕捉＆ネットへこみ ───────────────────────────────────
+// ゴールに入ったボールは貫通も跳ね返りもさせず、ネットを強くへこませて
+// ゴール内に留める。scoreGoal / pkResolve('goal') から開始する。
+let goalCapture = null;                  // { sign:+1/-1 }（吸い込み中）
+const NET_MAX_DEPTH = 0.75;              // ネットが伸びる最大量(m)
+const NET_BULGE_R   = 1.7;              // へこみが及ぶ半径(縦横,m)
+
+function beginGoalCapture(sign) {
+  goalCapture = { sign };
+}
+
+// ネットの背面/側面/天井の頂点を、ボール接触点(by,bz)を中心に外側へ押し出してへこませる。
+// 口元(x=ox)は動かさず奥(backX)ほど大きく変位させて自然なポケットを作る。
+function applyNetDent(net, by, bz, depth) {
+  const pos  = net.geom.attributes.position;
+  const rest = net.rest;
+  const { ox, backX, sign } = net;
+  const span = Math.abs(backX - ox) || 1;
+  for (let i = 0; i < pos.count; i++) {
+    const rx = rest[i * 3], ry = rest[i * 3 + 1], rz = rest[i * 3 + 2];
+    const xw   = Math.min(1, Math.max(0, ((rx - ox) * sign) / span)); // 口元0→奥1
+    const d    = Math.hypot(ry - by, rz - bz);
+    const prox = Math.max(0, 1 - d / NET_BULGE_R);
+    const push = depth * prox * prox * xw;
+    pos.setX(i, rx + sign * push);
+    pos.setY(i, ry);
+    pos.setZ(i, rz);
+  }
+  pos.needsUpdate = true;
+  net.geom.computeBoundingSphere();
+}
+
+function restoreNet(net) {
+  const pos = net.geom.attributes.position;
+  pos.array.set(net.rest);
+  pos.needsUpdate = true;
+  net.geom.computeBoundingSphere();
+}
+function restoreAllNets() { for (const n of goalNets) restoreNet(n); }
+
+// 毎フレーム: ボールをネット手前で受け止め、ゴール内にクランプしつつネットをへこませる。
+function updateGoalCapture(dt) {
+  if (!goalCapture) return;
+  const sign = goalCapture.sign;
+  const net  = goalNets.find(n => n.sign === sign);
+  const goalLineX = sign * GOAL_X;
+  const backX = net ? net.backX : goalLineX + sign * 2.2;
+  const ghw   = net ? net.ghw : GOAL_HALF_Z;
+  const H     = net ? net.H : 2.44;
+
+  // 物理（重力）＋ネットが運動量を吸収する強めの減衰
+  ballVel.y -= BALL_GRAVITY * dt;
+  ballVel.x *= 0.88; ballVel.z *= 0.88;
+  ballMesh.position.addScaledVector(ballVel, dt);
+
+  // z（ポール内）・y（バー下/地面上）にクランプ
+  const zLim = ghw - BALL_R;
+  if (ballMesh.position.z >  zLim) { ballMesh.position.z =  zLim; ballVel.z = 0; }
+  if (ballMesh.position.z < -zLim) { ballMesh.position.z = -zLim; ballVel.z = 0; }
+  if (ballMesh.position.y < BALL_R) {
+    ballMesh.position.y = BALL_R;
+    ballVel.y = ballVel.y < -1 ? -ballVel.y * 0.2 : 0;
+    ballVel.x *= 0.7; ballVel.z *= 0.7; // 着地で転がりを弱める
+  }
+  const yLim = H - BALL_R;
+  if (ballMesh.position.y > yLim) { ballMesh.position.y = yLim; if (ballVel.y > 0) ballVel.y = 0; }
+
+  // x: ネット手前で停止（貫通防止）＋ゴールライン内側より手前へは戻さない（跳ね返り/外出防止）
+  const innerBackX = backX - sign * BALL_R;
+  const innerLineX = goalLineX + sign * (BALL_R + 0.05);
+  if (sign > 0) {
+    if (ballMesh.position.x > innerBackX) { ballMesh.position.x = innerBackX; if (ballVel.x > 0) ballVel.x = 0; }
+    if (ballMesh.position.x < innerLineX)   ballMesh.position.x = innerLineX;
+  } else {
+    if (ballMesh.position.x < innerBackX) { ballMesh.position.x = innerBackX; if (ballVel.x < 0) ballVel.x = 0; }
+    if (ballMesh.position.x > innerLineX)   ballMesh.position.x = innerLineX;
+  }
+
+  // ネットのへこみ量＝ボールがどれだけ奥に入っているか（口元0→奥で最大）
+  const span  = Math.abs(backX - goalLineX) || 1;
+  const reach = Math.min(1, Math.abs(ballMesh.position.x - goalLineX) / span);
+  if (net) applyNetDent(net, ballMesh.position.y, ballMesh.position.z, NET_MAX_DEPTH * reach);
+
+  // 転がり回転
+  const hspeed = Math.hypot(ballVel.x, ballVel.z);
+  if (hspeed > 0.01) {
+    const axis = new THREE.Vector3(ballVel.z, 0, -ballVel.x).normalize();
+    ballMesh.rotateOnWorldAxis(axis, (hspeed * dt) / BALL_R);
+  }
+}
+
 function resetAfterGoal(scorer) {
+  goalCapture = null; restoreAllNets();   // ゴール時のネットへこみを元に戻す
   ballMesh.position.set(0, BALL_R, 0);
   ballVel.set(0, 0, 0);
   ballCurveRate = 0;
@@ -1677,13 +1781,14 @@ function scoreGoal(scorer) {
   if (isGoalScene) return;
   isGoalScene = true;
   if (scorer === 'player') playerScore++; else cpuScore++;
-  ballMesh.position.set(scorer === 'player' ? GOAL_X + 0.7 : -(GOAL_X + 0.7), BALL_R, 0);
-  ballVel.set(0, 0, 0);
   ballOwner = 'none';
   isDribbling = false;
   updateScoreDisplay();
   showGoalFlash(scorer);
   if (isMultiplayer) {
+    // MPはネット演出を入れず従来どおりスナップ（同期との競合回避）
+    ballMesh.position.set(scorer === 'player' ? GOAL_X + 0.7 : -(GOAL_X + 0.7), BALL_R, 0);
+    ballVel.set(0, 0, 0);
     // scorer: 'player'=Hostが得点, 'cpu'=Guestが得点
     const mpScorer = scorer === 'player' ? 'host' : 'guest';
     mpGoalScorer   = mpScorer;
@@ -1691,21 +1796,25 @@ function scoreGoal(scorer) {
     mpHandlers.publishEvent({ type: 'goal', scorer: mpScorer, seq: lastGoalSeq });
     mpHandlers.publishScore({ host: playerScore, guest: cpuScore });
     setTimeout(() => { mpResetAfterGoal(); isGoalScene = false; }, 2500);
-  } else if (playerScore >= MATCH_TARGET || cpuScore >= MATCH_TARGET) {
-    // 5点先取で試合終了 → リザルト（リトライ / ロビー）。isGoalScene は維持して停止。
-    matchOver = true;
-    const win = playerScore > cpuScore;
-    setTimeout(() => {
-      showMatchResult({
-        title: win ? 'WIN!' : 'LOSE...',
-        cls:   win ? 'win'  : 'lose',
-        scoreText: `${playerScore} - ${cpuScore}`,
-        sub: win ? 'You reached 5 goals' : 'CPU reached 5 goals',
-        onRetry: restartMatch,
-      });
-    }, 2200);
   } else {
-    setTimeout(() => { resetAfterGoal(scorer); isGoalScene = false; }, 2500);
+    // 非MP: ゴールに入ったボールをネットへ吸い込む（貫通/跳ね返り防止＋ネットへこみ）
+    beginGoalCapture(scorer === 'player' ? 1 : -1);
+    if (playerScore >= MATCH_TARGET || cpuScore >= MATCH_TARGET) {
+      // 5点先取で試合終了 → リザルト（リトライ / ロビー）。isGoalScene は維持して停止。
+      matchOver = true;
+      const win = playerScore > cpuScore;
+      setTimeout(() => {
+        showMatchResult({
+          title: win ? 'WIN!' : 'LOSE...',
+          cls:   win ? 'win'  : 'lose',
+          scoreText: `${playerScore} - ${cpuScore}`,
+          sub: win ? 'You reached 5 goals' : 'CPU reached 5 goals',
+          onRetry: restartMatch,
+        });
+      }, 2200);
+    } else {
+      setTimeout(() => { resetAfterGoal(scorer); isGoalScene = false; }, 2500);
+    }
   }
 }
 
@@ -1732,6 +1841,7 @@ function pkRenderHud() {
 // プレイヤーをスポットに、ボールを足元に、GKをゴール中央に配置して次のキック準備
 function pkPlaceForKick() {
   if (!isPK) return;
+  goalCapture = null; restoreAllNets();    // 前のキックのネットへこみを元に戻す
   player.position.set(pkSpotX(), groundY, 0);
   player.rotation.y = -Math.PI / 2;        // 攻撃方向(+x)
   ballMesh.position.set(pkSpotX(), BALL_R, 0);
@@ -1763,7 +1873,7 @@ function pkResolve(result) {
   if (pkState !== 'live') return;
   pkState = 'resolved';
   pkKick++;
-  if (result === 'goal') pkGoals++;
+  if (result === 'goal') { pkGoals++; beginGoalCapture(1); } // ボールをネットへ吸い込む
   gkBallHolder = 'none';     // GKのスローを止める
   pkRenderHud();
   if (result === 'goal')      pkFlash('GOAL!',  'PK  成功', false);
@@ -2050,6 +2160,7 @@ export function startGame(config) {
   playerScore = 0; cpuScore = 0; updateScoreDisplay();
   isGoalScene = false;
   matchOver = false;
+  goalCapture = null;   // ゴール捕捉状態をクリア（ネットはbuildFieldで再生成され初期形）
   hideMatchResult();
   // スキルチャージを満タンに（HUDはPK以外で表示）
   skillCharges = MAX_SKILL_CHARGES; renderSkillCharges();
@@ -3024,6 +3135,9 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   if (mixer) mixer.update(dt);
+
+  // ゴールに入ったボールはネットへ吸い込み＆ネットへこみ（他のボール処理より優先）
+  if (goalCapture) updateGoalCapture(dt);
 
   // ── ボール更新 ───────────────────────────────────────────────────
   const remoteRole = mpRole === 'host' ? 'guest' : 'host';
