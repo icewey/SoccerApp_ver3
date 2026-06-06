@@ -77,6 +77,15 @@ const CHARACTERS = [
     color: '#ff66cc',
     available: true,
   },
+  {
+    id: 'kaizer',
+    name: 'カイザー的キャラ',
+    number: '20',
+    fbx: './キャラ/カイザー的なキャラ/T-Pose.fbx',
+    portrait: './キャラ/カイザー的なキャラ/ベースイラスト/正面.png',
+    color: '#3a8cff',
+    available: true,
+  },
 ];
 
 let selectedIdx = 0;

@@ -394,6 +394,7 @@ const SKILL_BY_CHAR = {
   bachira: 'bachira_dash',  // 蜂楽: その場フェイント→急加速（黄エフェクト・周囲の敵をフリーズ）
   reio:    'reo_copy',      // 玲王: 近くの敵のスキルをコピーして発動（紫エフェクト）
   shidou:  'shidou_smash',  // 士道: オーバーヘッド・スマッシュシュート（黄＆ピンク残像）
+  kaizer:  'kaizer_impact', // カイザー: 超高速ストレートシュート（青白レーザービーム）
 };
 let playerSkill  = 'spin';
 let enemyCharId  = null;  // 敵CPUのキャラID（玲王のコピー用にスキルを引く）
@@ -429,6 +430,7 @@ function useSkill() {
   else if (playerSkill === 'bachira_dash')  bachiraDash();
   else if (playerSkill === 'reo_copy')      reoCopySkill();
   else if (playerSkill === 'shidou_smash')  shidouSmash();
+  else if (playerSkill === 'kaizer_impact') kaizerImpact();
   else startSpin(); // デフォルト: スピン（ドリブル中のみ・内部でガード）
 
   // 実際に発動したときだけ1チャージ消費
@@ -450,6 +452,7 @@ function reoCopySkill() {
   else if (copied === 'chigiri_boost') chigiriBoost();
   else if (copied === 'bachira_dash')  bachiraDash();
   else if (copied === 'shidou_smash')  shidouSmash();
+  else if (copied === 'kaizer_impact') kaizerImpact();
   else startSpin(); // 敵が玲王/無スキルなら通常スピン
 }
 
@@ -641,6 +644,38 @@ function barouCurveShot() {
     ballVel.set(-Math.sin(kickAngle) * BAROU_POWER, 9, -Math.cos(kickAngle) * BAROU_POWER);
     ballCurveRate = playerFootSign * BAROU_CURVE; // 控えめなカーブ
     setBallTrail([0xcc1111, 0x0a0a0a], THREE.NormalBlending); // 赤黒の軌道
+  }, tHit * 1000);
+}
+
+// カイザー: 超高速ストレートシュート（青白のレーザービーム）。
+//  まっすぐ・極めて速い・低弾道。発射点から前方へレーザービームのエフェクトを放つ。
+const KAIZER_HIT_FRAC = 0.42; // 接触タイミング（クリップ0.7s）
+const KAIZER_POWER    = 78;   // 超高速の水平初速（全スキル中最速）
+const KAIZER_LIFT     = 5;    // ほぼ直線に見えるよう低めの打ち上げ
+const KAIZER_FOLLOW   = 0.45; // 接触後のフォロースルー
+function kaizerImpact() {
+  if (ballOwner !== 'player') return;
+  const clip = clips['kaizer_impact'];
+  if (!clip || !mixer) { startKick(false, 0, 2.0); return; } // 素材が無ければ通常シュート
+  endSpin();
+  isKicking = true;
+  const tHit = clip.duration * KAIZER_HIT_FRAC;
+  kickTimer = tHit + KAIZER_FOLLOW;
+  fadeToClip('kaizer_impact', false);
+  playerPickupCooldown = tHit + KAIZER_FOLLOW; enemyPickupCooldown = tHit + KAIZER_FOLLOW;
+
+  const sid = ++skillSession;
+  setTimeout(() => {
+    if (sid !== skillSession || !gameStarted || isGoalScene) return;
+    const ry  = player.rotation.y;
+    const fwd = new THREE.Vector3(-Math.sin(ry), 0, -Math.cos(ry));
+    ballOwner = 'none'; isDribbling = false; ballSpin.set(0, 0, 0); ballCurveRate = 0; // 完全ストレート
+    const origin = new THREE.Vector3(player.position.x + fwd.x * 0.5, BALL_R + 0.9, player.position.z + fwd.z * 0.5);
+    ballMesh.position.copy(origin);
+    ballVel.set(fwd.x * KAIZER_POWER, KAIZER_LIFT, fwd.z * KAIZER_POWER);
+    setBallTrail([0xffffff, 0x49b6ff], THREE.AdditiveBlending); // 青白の軌道
+    spawnKaizerBeam(origin, fwd);   // レーザービーム本体
+    spawnKaizerFlash(origin);       // 発射フラッシュ
   }, tHit * 1000);
 }
 
@@ -2048,6 +2083,8 @@ const ANIM_FILES = [
   // 士道の固有スキル「オーバーヘッド・スマッシュシュート」用（連結して使う）
   ['shidou01', './キャラ/士道的なキャラ/Skill/士道シュート/overhead01.fbx'],
   ['shidou02', './キャラ/士道的なキャラ/Skill/士道シュート/overhead02.fbx'],
+  // カイザーの固有スキル「超高速ストレートシュート」用
+  ['kaizer_impact', './キャラ/カイザー的なキャラ/Skill/kaizer_Impact.fbx'],
 ];
 let CORE_TOTAL = 1 + ANIM_FILES.length; // キャラ + 全アニメ（敵追加時はstartGame内で+1）
 let coreReady = 0;
@@ -2844,6 +2881,62 @@ function spawnBarouBolt() {
   barouBolts.push({ line, life: 0, maxLife: 0.06 + Math.random() * 0.09 });
 }
 
+// ── カイザー: 超高速シュートの青白レーザービーム ───────────────────────────
+const kaizerBeams = [];
+const KAIZER_BEAM_LEN = 48;
+function spawnKaizerBeam(origin, dir) {
+  const d = dir.clone().setY(0).normalize();
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+  const mkCyl = (radius, color, op) => {
+    const geom = new THREE.CylinderGeometry(radius, radius, KAIZER_BEAM_LEN, 14, 1, true);
+    const mat  = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: op,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.quaternion.copy(q);
+    mesh.position.copy(origin).addScaledVector(d, KAIZER_BEAM_LEN / 2);
+    mesh.renderOrder = 997;
+    scene.add(mesh);
+    return mesh;
+  };
+  // 外側の青いグロー＋内側の白いコア（三重）
+  const meshes = [
+    mkCyl(0.75, 0x2a8cff, 0.5),
+    mkCyl(0.36, 0x8fd0ff, 0.8),
+    mkCyl(0.15, 0xffffff, 1.0),
+  ];
+  kaizerBeams.push({ meshes, life: 0, maxLife: 0.36 });
+}
+
+function spawnKaizerFlash(origin) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.7, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  mesh.position.copy(origin);
+  mesh.renderOrder = 997;
+  scene.add(mesh);
+  kaizerBeams.push({ meshes: [mesh], life: 0, maxLife: 0.22, flash: true });
+}
+
+function updateKaizerBeams(dt) {
+  for (let i = kaizerBeams.length - 1; i >= 0; i--) {
+    const k = kaizerBeams[i];
+    k.life += dt;
+    const t = k.life / k.maxLife;
+    for (const m of k.meshes) {
+      m.material.opacity *= 0.84;
+      if (k.flash) m.scale.setScalar(1 + t * 2.2);      // フラッシュは膨らんで消える
+      else { m.scale.x = m.scale.z = 1 + t * 0.6; }     // ビームは少し太くなって消える
+    }
+    if (k.life >= k.maxLife) {
+      for (const m of k.meshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+      kaizerBeams.splice(i, 1);
+    }
+  }
+}
+
 function updateCharFx(dt) {
   if (chigiriBoostTimer > 0) chigiriBoostTimer -= dt;
   if (barouSkillTimer > 0)   barouSkillTimer -= dt;
@@ -2891,6 +2984,8 @@ function updateCharFx(dt) {
     }
   }
 
+  updateKaizerBeams(dt); // カイザーのレーザービーム
+
   for (let i = auraParticles.length - 1; i >= 0; i--) {
     const p = auraParticles[i];
     p.life += dt;
@@ -2913,7 +3008,8 @@ function clearCharFx() {
   for (const p of auraParticles) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); }
   for (const g of charGhosts)    { scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose(); }
   for (const b of barouBolts)    { scene.remove(b.line); b.line.geometry.dispose(); b.line.material.dispose(); }
-  auraParticles.length = 0; charGhosts.length = 0; barouBolts.length = 0;
+  for (const k of kaizerBeams)   { for (const m of k.meshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } }
+  auraParticles.length = 0; charGhosts.length = 0; barouBolts.length = 0; kaizerBeams.length = 0;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
