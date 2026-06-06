@@ -86,6 +86,15 @@ const CHARACTERS = [
     color: '#3a8cff',
     available: true,
   },
+  {
+    id: 'yukimiya',
+    name: '雪宮的キャラ',
+    number: '23',
+    fbx: './キャラ/雪宮的なキャラ/T-Pose.fbx',
+    portrait: './キャラ/雪宮的なキャラ/ベースイラスト/正面.png',
+    color: '#7fd8ff',
+    available: true,
+  },
 ];
 
 let selectedIdx = 0;

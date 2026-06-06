@@ -395,6 +395,7 @@ const SKILL_BY_CHAR = {
   reio:    'reo_copy',      // 玲王: 近くの敵のスキルをコピーして発動（紫エフェクト）
   shidou:  'shidou_smash',  // 士道: オーバーヘッド・スマッシュシュート（黄＆ピンク残像）
   kaizer:  'kaizer_impact', // カイザー: 超高速ストレートシュート（青白レーザービーム）
+  yukimiya: 'yukimiya_gyro',// 雪宮: ドリブルからのジャイロシュート（弧を描く蹴り上げ）
 };
 let playerSkill  = 'spin';
 let enemyCharId  = null;  // 敵CPUのキャラID（玲王のコピー用にスキルを引く）
@@ -431,6 +432,7 @@ function useSkill() {
   else if (playerSkill === 'reo_copy')      reoCopySkill();
   else if (playerSkill === 'shidou_smash')  shidouSmash();
   else if (playerSkill === 'kaizer_impact') kaizerImpact();
+  else if (playerSkill === 'yukimiya_gyro') yukimiyaGyro();
   else startSpin(); // デフォルト: スピン（ドリブル中のみ・内部でガード）
 
   // 実際に発動したときだけ1チャージ消費
@@ -453,6 +455,7 @@ function reoCopySkill() {
   else if (copied === 'bachira_dash')  bachiraDash();
   else if (copied === 'shidou_smash')  shidouSmash();
   else if (copied === 'kaizer_impact') kaizerImpact();
+  else if (copied === 'yukimiya_gyro') yukimiyaGyro();
   else startSpin(); // 敵が玲王/無スキルなら通常スピン
 }
 
@@ -612,6 +615,87 @@ function updateShidouSkill(dt) {
     setBallTrail([0xffd400, 0xff3399], THREE.AdditiveBlending);
   }
   // 蹴った後はボール自由飛行（updateBall/ルーズ物理が処理）
+}
+
+// 雪宮: ドリブルからのジャイロシュート（3モーション連結）。
+//  01: 進行方向の左斜め前へ進む / 02: 右斜め前へ切り込み /
+//  03: 左へ蹴り上げ → 最高点から時計回りに弧を描いて左下へ落ちる。
+const YUKI_BLEND      = 0.1;
+const YUKI_MOVE_SPEED = 9;    // 01/02 のドリブル移動速度
+const YUKI_POWER      = 20;   // 蹴り上げの水平初速
+const YUKI_LIFT       = 13;   // 上向き初速（高く上げて最高点を作る）
+const YUKI_CURVE      = 1.5;  // 時計回りのカーブ（弧の強さ。符号で回転方向）
+let yukiTimer = 0, yukiTotal = 0, yukiT1 = 0, yukiT2 = 0, yukiContactT = 0;
+let yukiKicked = false, yukiAngle = 0;
+
+function yukiHoldBallAtFeet() {
+  const fwd = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
+  ballOwner = 'none'; isDribbling = false; ballCurveRate = 0; ballSpin.set(0, 0, 0);
+  ballMesh.position.set(player.position.x + fwd.x * DRIBBLE_OFFSET, BALL_R, player.position.z + fwd.z * DRIBBLE_OFFSET);
+  ballVel.set(0, 0, 0);
+}
+
+function yukimiyaGyro() {
+  if (ballOwner !== 'player') return;
+  const c1 = clips['yuki01'], c2 = clips['yuki02'], c3 = clips['yuki03'];
+  if (!c1 || !c2 || !c3 || !mixer) { startKick(false, 0, 1.8); return; } // 素材が無ければ通常シュート
+  if (!clips['yukimiya_gyro']) buildComboClip('yukimiya_gyro', ['yuki01', 'yuki02', 'yuki03'], YUKI_BLEND);
+  const combo = clips['yukimiya_gyro'];
+  if (!combo) { startKick(false, 0, 1.8); return; }
+
+  endSpin();
+  isKicking = true;
+  kickTimer = combo.duration + 0.1;
+  fadeToClip('yukimiya_gyro', false);
+
+  yukiAngle    = player.rotation.y;
+  yukiTotal    = combo.duration;
+  yukiT1       = c1.duration + YUKI_BLEND;                       // 01→02 切替
+  yukiT2       = yukiT1 + c2.duration + YUKI_BLEND;              // 02→03 切替
+  yukiContactT = yukiT2 + Math.min(c3.duration * 0.4, 0.45);    // 03の蹴り接触
+  yukiTimer    = yukiTotal;
+  yukiKicked   = false;
+  playerPickupCooldown = combo.duration + 0.2;
+  enemyPickupCooldown  = combo.duration + 0.2;
+  ballOwner = 'none'; isDribbling = false; // ボールは updateYukimiyaSkill が駆動
+}
+
+// 雪宮スキルの毎フレーム駆動。01左斜め前→02右斜め前→03で左へ蹴り上げ＋カーブ。
+function updateYukimiyaSkill(dt) {
+  if (yukiTimer <= 0) return;
+  yukiTimer -= dt;
+  const e = yukiTotal - yukiTimer;
+  player.position.y = groundY;
+  const fwd   = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
+  const right = new THREE.Vector3(Math.cos(yukiAngle), 0, -Math.sin(yukiAngle));
+  const left  = right.clone().multiplyScalar(-1);
+
+  if (e < yukiT1) {
+    // 01: 左斜め前へドリブル
+    const dir = fwd.clone().add(left).normalize();
+    player.position.addScaledVector(dir, YUKI_MOVE_SPEED * dt);
+    charClampToField(playerChar);
+    yukiHoldBallAtFeet();
+  } else if (e < yukiT2) {
+    // 02: 右斜め前へ切り込み
+    const dir = fwd.clone().add(right).normalize();
+    player.position.addScaledVector(dir, YUKI_MOVE_SPEED * dt);
+    charClampToField(playerChar);
+    yukiHoldBallAtFeet();
+  } else if (e < yukiContactT) {
+    // 03前半: 蹴る直前までボール保持
+    yukiHoldBallAtFeet();
+  } else if (!yukiKicked) {
+    // 03接触: 左へ蹴り上げ。最高点から時計回りに弧を描いて左下へ（重力＋カーブ）。
+    yukiKicked = true;
+    const launchDir = left.clone().addScaledVector(fwd, 0.3).normalize(); // 左やや前
+    ballOwner = 'none'; isDribbling = false; ballSpin.set(0, 0, 0);
+    ballMesh.position.set(player.position.x + launchDir.x * 0.4, BALL_R + 0.3, player.position.z + launchDir.z * 0.4);
+    ballVel.set(launchDir.x * YUKI_POWER, YUKI_LIFT, launchDir.z * YUKI_POWER);
+    ballCurveRate = YUKI_CURVE; // 時計回りの弧
+    setBallTrail([0xbfe8ff, 0xffffff], THREE.AdditiveBlending); // 氷白の軌道
+  }
+  // 蹴った後はボール自由飛行（ルーズ物理が重力＋カーブで弧を描く）
 }
 
 // 馬狼: ほんの少し曲がる強烈カーブシュート（赤黒の残像）
@@ -1724,6 +1808,7 @@ function mpResetAfterGoal() {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
+  yukiTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -1842,6 +1927,7 @@ function resetAfterGoal(scorer) {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
+  yukiTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -2007,6 +2093,7 @@ function pkPlaceForKick() {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
+  yukiTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -2109,6 +2196,10 @@ const ANIM_FILES = [
   ['shidou02', './キャラ/士道的なキャラ/Skill/士道シュート/overhead02.fbx'],
   // カイザーの固有スキル「超高速ストレートシュート」用
   ['kaizer_impact', './キャラ/カイザー的なキャラ/Skill/kaizer_Impact.fbx'],
+  // 雪宮の固有スキル「ジャイロシュート」用（3モーション連結）
+  ['yuki01', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/シザーズ01.fbx'],
+  ['yuki02', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/シザーズ02.fbx'],
+  ['yuki03', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/シザーズ03.fbx'],
   // セットプレー用（スローイン / コーナーキック）
   ['throw_in',    './animations/Throw In.fbx'],
   ['corner_kick', './animations/CornerKick.fbx'],
@@ -2271,6 +2362,7 @@ export function startGame(config) {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
+  yukiTimer = 0;
   resetBallTrail();
   clearCharFx();
   cancelCharge();
@@ -3845,6 +3937,7 @@ function animate() {
   updateCharFx(dt);
   if (gameStarted && !isGoalScene) updateBachira(dt);
   if (gameStarted && !isGoalScene) updateShidouSkill(dt);
+  if (gameStarted && !isGoalScene) updateYukimiyaSkill(dt);
 
   if (gameStarted) {
   if (!isGoalScene) {
