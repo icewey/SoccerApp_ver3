@@ -772,6 +772,68 @@ function charClampToField(char) {
   char.group.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, char.group.position.z));
 }
 
+// ── プレイヤー同士の貫通防止 ───────────────────────────────────────────────
+// 単純移動時のみ衝突。スキル/特殊モーション中（キック・タックル・スピン・
+// 各種固有スキル）は貫通OK（solid=false）。毎フレーム移動後に呼ぶ。
+const CHAR_COLL_R = 0.45; // 1キャラの衝突半径（合計 約0.9mまで近づける）
+
+function playerInSkill() {
+  return isKicking || isPassing || isTackling || isSpinning
+    || bachiraSkillTimer > 0 || chigiriBoostTimer > 0 || shidouJumpTimer > 0;
+}
+function enemyInSkill() { return enemyKicking || enemyTackling; }
+function cpu2InSkill(c) { return c.kicking || c.passing || c.tackling || c.oneShotTimer > 0; }
+
+function collidersThisFrame() {
+  const list = [];
+  list.push({ g: player, solid: !playerInSkill(), movable: true });
+  if (mode2v2) {
+    list.push({ g: ally,   solid: !cpu2InSkill(c2Ally),   movable: true });
+    list.push({ g: enemy,  solid: !cpu2InSkill(c2Enemy),  movable: true });
+    list.push({ g: enemy2, solid: !cpu2InSkill(c2Enemy2), movable: true });
+  } else if (hasEnemy) {
+    list.push({ g: enemy, solid: !enemyInSkill(), movable: true });
+  }
+  if (isMultiplayer && remotePeer.visible) {
+    list.push({ g: remotePeer, solid: true, movable: false }); // リモートは同期優先で動かさない
+  }
+  return list;
+}
+
+// 重なっているキャラ同士を押し戻して貫通を防ぐ
+function resolveCharCollisions() {
+  const cs = collidersThisFrame();
+  const minD = CHAR_COLL_R * 2, minD2 = minD * minD;
+  for (let i = 0; i < cs.length; i++) {
+    for (let j = i + 1; j < cs.length; j++) {
+      const a = cs[i], b = cs[j];
+      if (!a.solid || !b.solid) continue;   // どちらかがスキル中なら貫通OK
+      if (!a.movable && !b.movable) continue;
+      let dx = b.g.position.x - a.g.position.x;
+      let dz = b.g.position.z - a.g.position.z;
+      let d2 = dx * dx + dz * dz;
+      if (d2 >= minD2) continue;
+      if (d2 < 1e-6) { dx = 0.01; dz = 0; d2 = 0.0001; } // 完全重なりは適当にずらす
+      const d = Math.sqrt(d2);
+      const overlap = minD - d;
+      const nx = dx / d, nz = dz / d;
+      let aShare, bShare;
+      if (a.movable && b.movable) { aShare = 0.5; bShare = 0.5; }
+      else if (a.movable)         { aShare = 1;   bShare = 0;   }
+      else                        { aShare = 0;   bShare = 1;   }
+      a.g.position.x -= nx * overlap * aShare;
+      a.g.position.z -= nz * overlap * aShare;
+      b.g.position.x += nx * overlap * bShare;
+      b.g.position.z += nz * overlap * bShare;
+    }
+  }
+  for (const c of cs) {
+    if (!c.movable) continue;
+    c.g.position.x = Math.max(-FIELD_HALF_W, Math.min(FIELD_HALF_W, c.g.position.x));
+    c.g.position.z = Math.max(-FIELD_HALF_D, Math.min(FIELD_HALF_D, c.g.position.z));
+  }
+}
+
 // タックル判定距離（共通）
 const TACKLE_DIST = 1.6;
 
@@ -3348,6 +3410,9 @@ function animate() {
       if (_spinGhostTimer >= 0.065) { spawnSpinGhost(); _spinGhostTimer = 0; }
     }
     _prevSpinning = isSpinning;
+
+    // プレイヤー同士の貫通防止（移動・AI更新の後に実行）
+    resolveCharCollisions();
   } // end !isGoalScene
 
     // リードアヘッド: 実際の移動量から進行方向を求め、移動中は前方 LEAD_DIST m を
