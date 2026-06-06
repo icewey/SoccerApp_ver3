@@ -622,9 +622,9 @@ function updateShidouSkill(dt) {
 //  03: 前方へ蹴り出す → ジェットコースターの一回転のような縦ループを描いてからゴールへ。
 const YUKI_BLEND      = 0.1;
 const YUKI_MOVE_SPEED = 9;     // 01/02 のドリブル移動速度
-const YUKI_LOOP_R     = 2.0;   // 縦ループ（1回転）の半径(m)
-const YUKI_LOOP_DUR   = 0.7;   // 1回転の所要時間(s)
-const YUKI_LOOP_DRIFT = 11;    // ループ中の前進ドリフト(m/s)。大きいほど前進しながら描く（バネ伸ばし）
+const YUKI_LOOP_R     = 3.3;   // 縦ループ（1回転）の半径(m)。大きいほど大きな円
+const YUKI_LOOP_DUR   = 0.8;   // 1回転の所要時間(s)
+const YUKI_LOOP_DRIFT = 14;    // ループ中の前進ドリフト(m/s)。大きいほど前進しながら描く（バネ伸ばし）
 const YUKI_EXIT_SPEED = 26;    // ループ後、前方への初速
 const YUKI_EXIT_VY    = 7;     // ループ後の上向き初速（ゴールへ伸びる弧）
 let yukiTimer = 0, yukiTotal = 0, yukiT1 = 0, yukiT2 = 0, yukiContactT = 0;
@@ -697,7 +697,7 @@ function updateYukimiyaSkill(dt) {
     yukiShotFwd.set(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
     yukiLoopBase.set(player.position.x + yukiShotFwd.x * 0.5, BALL_R, player.position.z + yukiShotFwd.z * 0.5);
     ballOwner = 'none'; isDribbling = false; ballCurveRate = 0; ballSpin.set(0, 0, 0);
-    setBallTrail([0xbfe8ff, 0xffffff], THREE.AdditiveBlending); // 氷白の軌道
+    setBallTrail([0xff7a00, 0xffc04a], THREE.AdditiveBlending); // オレンジの軌道（残像）
   }
 }
 
@@ -3100,6 +3100,8 @@ function updateCharFx(dt) {
       if (bachiraSkillTimer > 0)          spawnAuraParticle(player, 0xffd400, THREE.NormalBlending);
       // 士道スキル中: 黄＆ピンクのオーラを交互に（加算で発光）
       if (shidouJumpTimer > 0)            spawnAuraParticle(player, Math.random() < 0.5 ? 0xffd400 : 0xff3399, THREE.AdditiveBlending);
+      // 雪宮スキル中: オレンジのオーラ
+      if (yukiTimer > 0 || yukiShooting)  spawnAuraParticle(player, 0xff7a00, THREE.AdditiveBlending);
     }
     if (chigiriBoostTimer > 0) {
       _ghostTimer += dt;
@@ -3108,6 +3110,10 @@ function updateCharFx(dt) {
       // 残像は motion2（急加速）からのみ。motion1（その場フェイント）では出さない。
       _ghostTimer += dt;
       if (_ghostTimer >= 0.05) { _ghostTimer = 0; spawnCharGhost(0xffd400); }
+    } else if (yukiTimer > 0) {
+      // 雪宮スキル中: オレンジのシルエット残像
+      _ghostTimer += dt;
+      if (_ghostTimer >= 0.045) { _ghostTimer = 0; spawnCharGhost(0xff7a00); }
     }
     // 士道はゴースト残像なし。黄＆ピンクの水玉オーラのみ（上の spawnAuraParticle）。
 
