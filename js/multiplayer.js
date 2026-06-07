@@ -21,7 +21,7 @@ function genCode() {
 }
 
 // ── ルーム作成（host） ────────────────────────────────────────────
-export async function createRoom({ charFbx, fieldSize }) {
+export async function createRoom({ charFbx, charId, fieldSize }) {
   const db = getDb();
   let code;
   for (let i = 0; i < 5; i++) {
@@ -30,7 +30,7 @@ export async function createRoom({ charFbx, fieldSize }) {
     if (!snap.exists()) break;
   }
   await set(ref(db, `rooms/${code}`), {
-    host:   { charFbx, fieldSize },
+    host:   { charFbx, charId: charId ?? null, fieldSize },
     guest:  null,
     status: 'waiting',
     ts:     Date.now(),
@@ -42,13 +42,13 @@ export async function createRoom({ charFbx, fieldSize }) {
 }
 
 // ── ルーム参加（guest） ───────────────────────────────────────────
-export async function joinRoom(code, { charFbx }) {
+export async function joinRoom(code, { charFbx, charId }) {
   const db = getDb();
   const snap = await get(ref(db, `rooms/${code}`));
   if (!snap.exists())             throw new Error('ルームが見つかりません');
   const room = snap.val();
   if (room.status !== 'waiting') throw new Error('このルームはすでに満員です');
-  await set(ref(db, `rooms/${code}/guest`),  { charFbx });
+  await set(ref(db, `rooms/${code}/guest`),  { charFbx, charId: charId ?? null });
   await set(ref(db, `rooms/${code}/status`), 'playing');
   return room; // host の設定を返す
 }

@@ -399,6 +399,25 @@ const SKILL_BY_CHAR = {
 };
 let playerSkill  = 'spin';
 let enemyCharId  = null;  // 敵CPUのキャラID（玲王のコピー用にスキルを引く）
+
+// 玲王: その試合の敵キャラ分のスキルボタンを用意（コピー自動発動は廃止）。
+// 各ボタンは敵キャラ固有スキルを直接発動し、エフェクトは全て紫に上書きする。
+// チャージは全ボタン合計で MAX_SKILL_CHARGES 回（共有プール）。
+let reoSkills = []; // [{ id, skill, name }]
+const CHAR_SHORT = {
+  tensei: '天才', nekketsu: '熱血', reio: '玲王', nagi: '凪', barou: '馬狼',
+  chigiri: '千切', bachira: '蜂楽', shidou: '士道', kaizer: 'カイザー', yukimiya: '雪宮',
+};
+const SKILL_SHORT = {
+  fake_volley: 'ボレー', barou_curve: 'カーブ', chigiri_boost: '加速',
+  bachira_dash: 'フェイント', shidou_smash: 'スマッシュ', kaizer_impact: '高速弾',
+  yukimiya_gyro: 'ジャイロ', spin: 'スピン',
+};
+// 玲王エフェクト用の紫パレット（ボール軌道/オーラ/残像/ビーム/稲妻を上書き）
+const REO_FX1 = 0x9b30ff; // 鮮やかな紫
+const REO_FX2 = 0xc77dff; // 明るい紫
+const REO_FX3 = 0xe6ccff; // 紫がかった白（コア）
+const isReo = () => playerSkill === 'reo_copy';
 let skillSession = 0; // スキル中の stale setTimeout を無効化するカウンタ
 let chigiriBoostTimer = 0; // 千切ブースト残り時間（>0で加速・奪取不可・ピンク残像）
 let bachiraSkillTimer = 0; // 蜂楽スキル残り時間（>0で操作ロック・奪取不可・黄オーラ）
@@ -421,19 +440,13 @@ function skillActiveSig() {
 function useSkill() {
   if (!gameStarted || isGoalScene || matchOver || playerStunTimer > 0) return;
   if (isKicking || isPassing || isTackling) return;
+  // 玲王はスキルボタン(複数)で発動。KeyZ/単一ボタンは先頭スキルにマップ。
+  if (isReo()) { useReoSkill(0); return; }
   const limited = !isPK;
   if (limited && skillCharges <= 0) { flashNoCharge(); return; }
 
   const before = skillActiveSig();
-  if      (playerSkill === 'fake_volley')   nagiFakeVolley();
-  else if (playerSkill === 'barou_curve')   barouCurveShot();
-  else if (playerSkill === 'chigiri_boost') chigiriBoost();
-  else if (playerSkill === 'bachira_dash')  bachiraDash();
-  else if (playerSkill === 'reo_copy')      reoCopySkill();
-  else if (playerSkill === 'shidou_smash')  shidouSmash();
-  else if (playerSkill === 'kaizer_impact') kaizerImpact();
-  else if (playerSkill === 'yukimiya_gyro') yukimiyaGyro();
-  else startSpin(); // デフォルト: スピン（ドリブル中のみ・内部でガード）
+  fireSkillByName(playerSkill);
 
   // 実際に発動したときだけ1チャージ消費
   if (limited && skillActiveSig() !== before) {
@@ -442,21 +455,75 @@ function useSkill() {
   }
 }
 
-// 玲王: 近く(REO_COPY_RAD内)にいる敵CPUの固有スキルをコピーして発動する。
-const REO_COPY_RAD = 12;
-function reoCopySkill() {
-  if (!hasEnemy || !enemy) { startSpin(); return; }
-  const d = new THREE.Vector3().subVectors(enemy.position, player.position).setY(0).length();
-  if (d > REO_COPY_RAD) { startSpin(); return; } // 近くにいなければ通常スピン
-  const copied = SKILL_BY_CHAR[enemyCharId] || 'spin';
-  if      (copied === 'fake_volley')   nagiFakeVolley();
-  else if (copied === 'barou_curve')   barouCurveShot();
-  else if (copied === 'chigiri_boost') chigiriBoost();
-  else if (copied === 'bachira_dash')  bachiraDash();
-  else if (copied === 'shidou_smash')  shidouSmash();
-  else if (copied === 'kaizer_impact') kaizerImpact();
-  else if (copied === 'yukimiya_gyro') yukimiyaGyro();
-  else startSpin(); // 敵が玲王/無スキルなら通常スピン
+// スキル名から該当スキルを発動（玲王のボタンと共通）。未登録はスピン。
+function fireSkillByName(name) {
+  if      (name === 'fake_volley')   nagiFakeVolley();
+  else if (name === 'barou_curve')   barouCurveShot();
+  else if (name === 'chigiri_boost') chigiriBoost();
+  else if (name === 'bachira_dash')  bachiraDash();
+  else if (name === 'shidou_smash')  shidouSmash();
+  else if (name === 'kaizer_impact') kaizerImpact();
+  else if (name === 'yukimiya_gyro') yukimiyaGyro();
+  else startSpin();
+}
+
+// 玲王: idx 番目の敵キャラスキルを発動（共有チャージを1消費・エフェクトは紫）。
+function useReoSkill(idx) {
+  if (!gameStarted || isGoalScene || matchOver || playerStunTimer > 0) return;
+  if (isKicking || isPassing || isTackling) return;
+  const entry = reoSkills[idx];
+  if (!entry) return;
+  const limited = !isPK;
+  if (limited && skillCharges <= 0) { flashNoCharge(); return; }
+
+  const before = skillActiveSig();
+  fireSkillByName(entry.skill);
+
+  if (limited && skillActiveSig() !== before) {
+    skillCharges = Math.max(0, skillCharges - 1);
+    renderSkillCharges();
+  }
+}
+
+// その試合の敵キャラ分のスキルリストを構築（玲王のボタン用）。
+function computeReoSkills(config) {
+  if (SKILL_BY_CHAR[config.charId] !== 'reo_copy') return [];
+  const ids = [];
+  if (config.mode2v2) {
+    if (config.enemy1Id) ids.push(config.enemy1Id);
+    if (config.enemy2Id) ids.push(config.enemy2Id);
+  } else if (config.mp) {
+    if (config.mp.enemyId) ids.push(config.mp.enemyId);
+  } else if (config.enemyId) {
+    ids.push(config.enemyId);
+  }
+  const list = ids.map(id => {
+    const raw   = SKILL_BY_CHAR[id];
+    const skill = (raw && raw !== 'reo_copy') ? raw : 'spin'; // 無スキル/玲王同士はスピン
+    return { id, skill, name: CHAR_SHORT[id] || id };
+  });
+  // 敵が取得できない場合でも最低1ボタン（スピン）は出す
+  if (list.length === 0) list.push({ id: null, skill: 'spin', name: 'スピン' });
+  return list;
+}
+
+// 玲王のスキルボタン群を #touch-controls 内に動的生成。非玲王は単一スキルボタン。
+function buildReoSkillButtons() {
+  const container = document.getElementById('reo-skills');
+  const single    = document.getElementById('btn-skill');
+  if (!container) return;
+  container.innerHTML = '';
+  if (!isReo()) { container.style.display = 'none'; if (single) single.style.display = ''; return; }
+
+  if (single) single.style.display = 'none';
+  container.style.display = 'flex';
+  reoSkills.forEach((entry, i) => {
+    const btn = document.createElement('div');
+    btn.className = 'reo-skill-btn';
+    btn.innerHTML = `<span class="rs-name">${entry.name}</span><span class="rs-skill">${SKILL_SHORT[entry.skill] || entry.skill}</span>`;
+    bindTap(btn, () => useReoSkill(i));
+    container.appendChild(btn);
+  });
 }
 
 // 凪の2段式フェイクボレー:
@@ -723,6 +790,7 @@ function updateYukimiyaSkill(dt) {
 
 // ── オレンジの回転渦巻きエフェクト（飛行中、ボール周りを回転しながら粒子を出す）──
 function spawnYukiSwirlParticle(pos, color) {
+  if (isReo()) color = REO_FX1; // 玲王のコピー時は紫の渦巻き
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(0.085 + Math.random() * 0.05, 6, 6),
     new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })
@@ -1486,6 +1554,10 @@ window.addEventListener('keydown', e => {
     }
     if (e.code === 'KeyZ') {
       useSkill(); // 固有スキル（デフォルト=スピン、凪=フェイクボレー）
+    }
+    // 玲王: 数字キー1..Nで敵キャラ分のスキルを使い分け
+    if (isReo() && /^Digit[1-9]$/.test(e.code)) {
+      useReoSkill(parseInt(e.code.slice(5), 10) - 1);
     }
     if (e.code === 'KeyG') {
       pressPass(); // パス / パス要求（2vs2モードのみ・内部でガード）
@@ -2546,6 +2618,8 @@ export function startGame(config) {
   // 固有スキル: キャラIDから決定（未登録は spin）
   playerSkill = SKILL_BY_CHAR[config.charId] || 'spin';
   enemyCharId = config.enemyId || null; // 玲王のコピー用
+  reoSkills   = computeReoSkills(config); // 玲王: その試合の敵キャラ分のスキルボタン
+  buildReoSkillButtons();
 
   skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
@@ -3092,7 +3166,11 @@ const TRAIL_DEFAULT_COLORS = [0x3da5ff];
 let ballTrailColors = TRAIL_DEFAULT_COLORS;
 let ballTrailBlend  = THREE.AdditiveBlending;
 let _trailColorIdx  = 0;
-function setBallTrail(colors, blend) { ballTrailColors = colors; ballTrailBlend = blend; }
+function setBallTrail(colors, blend) {
+  // 玲王: どのスキルを使ってもボール軌道は紫に統一
+  if (isReo()) { colors = [REO_FX1, REO_FX2]; blend = THREE.AdditiveBlending; }
+  ballTrailColors = colors; ballTrailBlend = blend;
+}
 function resetBallTrail() { ballTrailColors = TRAIL_DEFAULT_COLORS; ballTrailBlend = THREE.AdditiveBlending; }
 
 function spawnBallTrail() {
@@ -3138,6 +3216,7 @@ let _auraTimer  = 0;
 let _ghostTimer = 0;
 
 function spawnAuraParticle(target, color, blend) {
+  if (isReo() && target === player) color = REO_FX1; // 玲王のオーラは紫
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(0.06 + Math.random() * 0.06, 6, 6),
     new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, blending: blend, depthWrite: false })
@@ -3149,6 +3228,7 @@ function spawnAuraParticle(target, color, blend) {
 }
 
 function spawnCharGhost(color) {
+  if (isReo()) color = REO_FX1; // 玲王の残像は紫
   const mesh = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.22, 1.1, 4, 8),
     new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, depthWrite: false })
@@ -3183,7 +3263,7 @@ function spawnBarouBolt() {
   // 赤黒: 鮮やかな赤を通常合成で（緑の芝でも赤く見える）、約3割を黒で混在
   const black = Math.random() < 0.32;
   const mat  = new THREE.LineBasicMaterial({
-    color: black ? 0x0a0000 : 0xff1414,
+    color: isReo() ? (black ? 0x4a1a7a : REO_FX1) : (black ? 0x0a0000 : 0xff1414), // 玲王は紫稲妻
     transparent: true,
     opacity: black ? 0.9 : 1.0,
     depthWrite: false,
@@ -3214,7 +3294,11 @@ function spawnKaizerBeam(origin, dir) {
     return mesh;
   };
   // 外側の青いグロー＋内側の白いコア（三重）
-  const meshes = [
+  const meshes = isReo() ? [
+    mkCyl(0.75, REO_FX1, 0.5),
+    mkCyl(0.36, REO_FX2, 0.8),
+    mkCyl(0.15, REO_FX3, 1.0),
+  ] : [
     mkCyl(0.75, 0x2a8cff, 0.5),
     mkCyl(0.36, 0x8fd0ff, 0.8),
     mkCyl(0.15, 0xffffff, 1.0),
@@ -3225,7 +3309,7 @@ function spawnKaizerBeam(origin, dir) {
 function spawnKaizerFlash(origin) {
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(0.7, 12, 12),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })
+    new THREE.MeshBasicMaterial({ color: isReo() ? REO_FX3 : 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })
   );
   mesh.position.copy(origin);
   mesh.renderOrder = 997;

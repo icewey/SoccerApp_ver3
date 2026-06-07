@@ -269,6 +269,7 @@ function mpReset() {
 function launchMultiplayer(role, code, hostInfo, guestInfo) {
   const myChar     = CHARACTERS[selectedIdx];
   const remoteCharFbx = role === 'host' ? guestInfo.charFbx : hostInfo.charFbx;
+  const remoteCharId  = role === 'host' ? guestInfo.charId  : hostInfo.charId;
   const fs         = hostInfo.fieldSize || 'compact';
 
   requestFullscreen();
@@ -288,6 +289,7 @@ function launchMultiplayer(role, code, hostInfo, guestInfo) {
       role,
       code,
       remoteCharFbx,
+      enemyId: remoteCharId ?? null, // 玲王のスキルボタン用（相手のキャラID）
       publishPlayer: (r, s) => publishPlayer(code, r, s),
       publishBall:   s      => publishBall(code, s),
       publishScore:  s      => publishScore(code, s),
@@ -395,7 +397,7 @@ function init() {
     if (!char.available) return;
     document.getElementById('mp-create').disabled = true;
     try {
-      const code = await createRoom({ charFbx: char.fbx, fieldSize });
+      const code = await createRoom({ charFbx: char.fbx, charId: char.id, fieldSize });
       currentCode = code;
       document.getElementById('mp-code-val').textContent = code;
       document.getElementById('mp-choice').style.display  = 'none';
@@ -436,9 +438,9 @@ function init() {
     document.getElementById('mp-enter').disabled = true;
     err.textContent = '';
     try {
-      const room = await joinRoom(code, { charFbx: char.fbx });
+      const room = await joinRoom(code, { charFbx: char.fbx, charId: char.id });
       currentCode = code;
-      launchMultiplayer('guest', code, room.host, { charFbx: char.fbx });
+      launchMultiplayer('guest', code, room.host, { charFbx: char.fbx, charId: char.id });
     } catch (e) {
       err.textContent = e.message;
       document.getElementById('mp-enter').disabled = false;

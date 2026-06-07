@@ -105,6 +105,22 @@
     #btn-tackle      { width:72px;height:72px; bottom:78px;  right:50px;  background:rgba(255,60,60,0.45); }
     #btn-straight, #btn-curve, #btn-tackle, #btn-skill, #btn-pass { font-size:0.72rem; text-align:center; line-height:1.1; }
 
+    /* 玲王: 敵キャラ分のスキルボタン（btn-skill位置から上方向に積む） */
+    #reo-skills {
+      position:absolute; right:10px; bottom:240px; display:none;
+      flex-direction:column-reverse; gap:8px; pointer-events:none;
+    }
+    .reo-skill-btn {
+      width:60px; height:60px; border-radius:50%;
+      pointer-events:all; touch-action:none; user-select:none; -webkit-user-select:none;
+      background:rgba(155,48,255,0.40); border:2px solid rgba(200,140,255,0.92);
+      color:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center;
+      box-shadow:0 0 12px rgba(155,48,255,0.5);
+    }
+    .reo-skill-btn:active { background:rgba(200,140,255,0.62); }
+    .reo-skill-btn .rs-name  { font-size:0.74rem; font-weight:700; line-height:1.05; }
+    .reo-skill-btn .rs-skill { font-size:0.56rem; opacity:0.9; line-height:1.05; }
+
     /* ── 横持ち: ボタンをコンパクトに再配置 ── */
     @media (orientation: landscape) and (pointer: coarse) {
       #touch-controls  { height: 190px; }
@@ -113,6 +129,10 @@
       #btn-straight    { width:60px;height:60px; bottom:66px;  right:88px; }
       #btn-curve       { width:60px;height:60px; bottom:66px;  right:14px; }
       #btn-tackle      { width:58px;height:58px; bottom:66px;  right:160px; }
+      #reo-skills      { bottom:128px; right:10px; gap:6px; }
+      .reo-skill-btn   { width:50px; height:50px; }
+      .reo-skill-btn .rs-name  { font-size:0.62rem; }
+      .reo-skill-btn .rs-skill { font-size:0.48rem; }
     }
 
     /* シュートのチャージバー（画面下中央） */
@@ -1138,6 +1158,8 @@
   <!-- タッチ操作ボタン（右側のみ） -->
   <div id="touch-controls">
     <div class="touch-btn" id="btn-skill">スキル</div>
+    <!-- 玲王: その試合の敵キャラ分のスキルボタン（JSで動的生成） -->
+    <div id="reo-skills"></div>
     <div class="touch-btn" id="btn-pass">パス</div>
     <div class="touch-btn" id="btn-straight">ストレート</div>
     <div class="touch-btn" id="btn-curve">カーブ</div>
