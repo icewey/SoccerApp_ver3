@@ -691,10 +691,12 @@ function updateYukimiyaSkill(dt) {
     // 03前半: 蹴る直前までボール保持
     yukiHoldBallAtFeet();
   } else if (!yukiKicked) {
-    // 03接触: 前方へ蹴り出し → ジェットコースター一回転の縦ループを開始
+    // 03接触: 左斜め前(45°)へ蹴り出し → ジェットコースター一回転の縦ループを開始
     yukiKicked = true;
     yukiShooting = true; yukiShotT = 0;
-    yukiShotFwd.set(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
+    const sFwd  = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
+    const sLeft = new THREE.Vector3(-Math.cos(yukiAngle), 0,  Math.sin(yukiAngle));
+    yukiShotFwd.copy(sFwd).add(sLeft).normalize(); // 左斜め前(45°)へシュート
     yukiLoopBase.set(player.position.x + yukiShotFwd.x * 0.5, BALL_R, player.position.z + yukiShotFwd.z * 0.5);
     ballOwner = 'none'; isDribbling = false; ballCurveRate = 0; ballSpin.set(0, 0, 0);
     setBallTrail([0xff7a00, 0xffc04a], THREE.AdditiveBlending); // オレンジの軌道（残像）
