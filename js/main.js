@@ -623,7 +623,7 @@ function updateShidouSkill(dt) {
 //      ボール軌道にはオレンジの回転する渦巻きエフェクト。
 //      地面バウンド時は物理法則を無視して左斜め前へ跳ねる。
 const YUKI_BLEND      = 0.1;
-const YUKI_DASH_SPEED = 22;    // 01/02 の移動速度（通常RUN_SPEED=11の2倍）
+const YUKI_MOVE_DIST  = 1.5;   // 01/02 各フェーズの移動距離(m)。フェーズ時間で割って一定速度に
 const YUKI_SPRINT_DUR = 0.5;   // 02(sprint)を流す時間（秒）
 const YUKI_PWR        = 1.7;   // カーブシュート相当の威力（charge の power に相当）
 const YUKI_BOUNCE_SPD = 14;    // バウンド時の左斜め前への水平速度（物理無視・固定）
@@ -682,13 +682,15 @@ function updateYukimiyaSkill(dt) {
   const right = new THREE.Vector3(Math.cos(yukiAngle), 0, -Math.sin(yukiAngle));
 
   if (e < yukiT1) {
-    // 01: 右へ移動（移動速度2倍）
-    player.position.addScaledVector(right, YUKI_DASH_SPEED * dt);
+    // 01: 右へ約1.5m（01フェーズ全体で割った一定速度）
+    const sp = YUKI_MOVE_DIST / Math.max(0.05, yukiT1);
+    player.position.addScaledVector(right, sp * dt);
     charClampToField(playerChar);
     yukiHoldBallAtFeet();
   } else if (e < yukiT2) {
-    // 02: sprintで正面へ移動（移動速度2倍・0.5秒のみ）
-    player.position.addScaledVector(fwd, YUKI_DASH_SPEED * dt);
+    // 02: 正面へ約1.5m（02フェーズ全体で割った一定速度）
+    const sp = YUKI_MOVE_DIST / Math.max(0.05, yukiT2 - yukiT1);
+    player.position.addScaledVector(fwd, sp * dt);
     charClampToField(playerChar);
     yukiHoldBallAtFeet();
   } else if (e < yukiContactT) {
