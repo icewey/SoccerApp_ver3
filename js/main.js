@@ -619,19 +619,18 @@ function updateShidouSkill(dt) {
 
 // 雪宮: ドリブルからのジャイロシュート（3モーション連結）。
 //  01: 進行方向の左斜め前(45°)へ進む / 02: 右斜め前(45°)へ切り込み /
-//  03: 前方へ蹴り出す → ジェットコースターの一回転のような縦ループを描いてからゴールへ。
+//  03: 左斜め前へ蹴り上げ → 最高点後は右へ曲がる弧（下が弧）を描いて右下へ。
+//      ボール軌道にはオレンジの回転する渦巻きエフェクト。
 const YUKI_BLEND      = 0.1;
 const YUKI_MOVE_SPEED = 9;     // 01/02 のドリブル移動速度
-const YUKI_LOOP_R     = 3.3;   // 縦ループ（1回転）の半径(m)。大きいほど大きな円
-const YUKI_LOOP_DUR   = 0.8;   // 1回転の所要時間(s)
-const YUKI_LOOP_DRIFT = 14;    // ループ中の前進ドリフト(m/s)。大きいほど前進しながら描く（バネ伸ばし）
-const YUKI_EXIT_SPEED = 26;    // ループ後、前方への初速
-const YUKI_EXIT_VY    = 7;     // ループ後の上向き初速（ゴールへ伸びる弧）
+const YUKI_POWER      = 17;    // 蹴り出しの水平初速
+const YUKI_LIFT       = 15;    // 上向き初速（高い最高点）
+const YUKI_CURVE      = -1.5;  // 最高点後に右へ曲げるカーブ（マグナス。負=右へ）
 let yukiTimer = 0, yukiTotal = 0, yukiT1 = 0, yukiT2 = 0, yukiContactT = 0;
 let yukiKicked = false, yukiAngle = 0;
-let yukiShooting = false, yukiShotT = 0;   // 縦ループ駆動
-const yukiLoopBase = new THREE.Vector3();
-const yukiShotFwd  = new THREE.Vector3();
+// オレンジの回転渦巻きエフェクト（飛行中、ボール周りを回りながら出す）
+let yukiSwirling = false, yukiSwirlT = 0, yukiSwirlPhase = 0;
+const yukiSwirl = [];
 
 function yukiHoldBallAtFeet() {
   const fwd = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
@@ -691,41 +690,71 @@ function updateYukimiyaSkill(dt) {
     // 03前半: 蹴る直前までボール保持
     yukiHoldBallAtFeet();
   } else if (!yukiKicked) {
-    // 03接触: 左斜め前(45°)へ蹴り出し → ジェットコースター一回転の縦ループを開始
+    // 03接触: 左斜め前(45°)へ蹴り上げ。最高点後は右へ曲がる弧を描いて右下へ（重力＋カーブ）。
     yukiKicked = true;
-    yukiShooting = true; yukiShotT = 0;
     const sFwd  = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
     const sLeft = new THREE.Vector3(-Math.cos(yukiAngle), 0,  Math.sin(yukiAngle));
-    yukiShotFwd.copy(sFwd).add(sLeft).normalize(); // 左斜め前(45°)へシュート
-    yukiLoopBase.set(player.position.x + yukiShotFwd.x * 0.5, BALL_R, player.position.z + yukiShotFwd.z * 0.5);
-    ballOwner = 'none'; isDribbling = false; ballCurveRate = 0; ballSpin.set(0, 0, 0);
-    setBallTrail([0xff7a00, 0xffc04a], THREE.AdditiveBlending); // オレンジの軌道（残像）
+    const dir   = sFwd.clone().add(sLeft).normalize();          // 左斜め前(45°)
+    ballOwner = 'none'; isDribbling = false; ballSpin.set(0, 0, 0);
+    ballMesh.position.set(player.position.x + dir.x * 0.4, BALL_R + 0.3, player.position.z + dir.z * 0.4);
+    ballVel.set(dir.x * YUKI_POWER, YUKI_LIFT, dir.z * YUKI_POWER);
+    ballCurveRate = YUKI_CURVE;                                 // 飛行中に右へ曲げる
+    setBallTrail([0xff7a00, 0xffc04a], THREE.AdditiveBlending); // オレンジの軌道
+    yukiSwirling = true; yukiSwirlT = 0; yukiSwirlPhase = 0;    // 渦巻きエフェクト開始
   }
 }
 
-// 縦ループ駆動: 前方平面で1回転（ジェットコースター）→ 完了後、前方へ解放しゴールへ。
-function updateYukimiyaShot(dt) {
-  if (!yukiShooting) return;
-  yukiShotT += dt;
-  const fwd = yukiShotFwd;
-  if (yukiShotT < YUKI_LOOP_DUR) {
-    // (前進, 上) の縦平面で円を描く。底→前→天井(背面)→後→底で1回転。
-    const phi   = (yukiShotT / YUKI_LOOP_DUR) * Math.PI * 2;
-    const along = YUKI_LOOP_DRIFT * yukiShotT + YUKI_LOOP_R * Math.sin(phi);
-    const up    = YUKI_LOOP_R * (1 - Math.cos(phi));
-    ballMesh.position.set(
-      yukiLoopBase.x + fwd.x * along,
-      yukiLoopBase.y + up,
-      yukiLoopBase.z + fwd.z * along
-    );
-    ballVel.set(fwd.x * YUKI_LOOP_DRIFT, 0, fwd.z * YUKI_LOOP_DRIFT); // トレイル表示用
-    ballCurveRate = 0;
-  } else {
-    // 1回転完了 → 前方へ蹴り出してゴールへ（以降は通常物理）
-    yukiShooting = false;
-    ballOwner = 'none'; isDribbling = false; ballCurveRate = 0;
-    ballVel.set(fwd.x * YUKI_EXIT_SPEED, YUKI_EXIT_VY, fwd.z * YUKI_EXIT_SPEED);
+// ── オレンジの回転渦巻きエフェクト（飛行中、ボール周りを回転しながら粒子を出す）──
+function spawnYukiSwirlParticle(pos, color) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.085 + Math.random() * 0.05, 6, 6),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  mesh.position.copy(pos);
+  scene.add(mesh);
+  yukiSwirl.push({ mesh, life: 0, maxLife: 0.32 + Math.random() * 0.12 });
+}
+function updateYukimiyaSwirl(dt) {
+  if (yukiSwirling) {
+    yukiSwirlT     += dt;
+    yukiSwirlPhase += dt * 22; // 回転スピード
+    // 飛行が終わったら（着地 or 一定時間）停止
+    if (yukiSwirlT > 1.8 || (yukiSwirlT > 0.25 && ballMesh.position.y <= BALL_R + 0.06)) yukiSwirling = false;
+    else {
+      // 速度に垂直な平面の基底を作り、その円周上に回転しながら粒子を配置＝渦巻き
+      const v = new THREE.Vector3(ballVel.x, ballVel.y, ballVel.z);
+      if (v.lengthSq() < 0.01) v.set(1, 0, 0);
+      v.normalize();
+      let up = new THREE.Vector3(0, 1, 0);
+      if (Math.abs(v.dot(up)) > 0.9) up.set(1, 0, 0);
+      const pA = new THREE.Vector3().crossVectors(v, up).normalize();
+      const pB = new THREE.Vector3().crossVectors(v, pA).normalize();
+      const r = 0.5;
+      for (let k = 0; k < 2; k++) {
+        const ang = yukiSwirlPhase + k * Math.PI;
+        const off = pA.clone().multiplyScalar(Math.cos(ang) * r).addScaledVector(pB, Math.sin(ang) * r);
+        spawnYukiSwirlParticle(
+          new THREE.Vector3(ballMesh.position.x + off.x, ballMesh.position.y + off.y, ballMesh.position.z + off.z),
+          k === 0 ? 0xff8a1a : 0xffb24a
+        );
+      }
+    }
   }
+  for (let i = yukiSwirl.length - 1; i >= 0; i--) {
+    const s = yukiSwirl[i];
+    s.life += dt;
+    const t = s.life / s.maxLife;
+    s.mesh.material.opacity = 0.95 * (1 - t);
+    s.mesh.scale.setScalar(1 - t * 0.5);
+    if (s.life >= s.maxLife) {
+      scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose();
+      yukiSwirl.splice(i, 1);
+    }
+  }
+}
+function clearYukiSwirl() {
+  for (const s of yukiSwirl) { scene.remove(s.mesh); s.mesh.geometry.dispose(); s.mesh.material.dispose(); }
+  yukiSwirl.length = 0; yukiSwirling = false;
 }
 
 // 馬狼: ほんの少し曲がる強烈カーブシュート（赤黒の残像）
@@ -1838,7 +1867,7 @@ function mpResetAfterGoal() {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
-  yukiTimer = 0; yukiShooting = false;
+  yukiTimer = 0; yukiSwirling = false;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -1957,7 +1986,7 @@ function resetAfterGoal(scorer) {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
-  yukiTimer = 0; yukiShooting = false;
+  yukiTimer = 0; yukiSwirling = false;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -2123,7 +2152,7 @@ function pkPlaceForKick() {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
-  yukiTimer = 0; yukiShooting = false;
+  yukiTimer = 0; yukiSwirling = false;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -2392,7 +2421,7 @@ export function startGame(config) {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
-  yukiTimer = 0; yukiShooting = false;
+  yukiTimer = 0; yukiSwirling = false;
   resetBallTrail();
   clearCharFx();
   cancelCharge();
@@ -3103,7 +3132,7 @@ function updateCharFx(dt) {
       // 士道スキル中: 黄＆ピンクのオーラを交互に（加算で発光）
       if (shidouJumpTimer > 0)            spawnAuraParticle(player, Math.random() < 0.5 ? 0xffd400 : 0xff3399, THREE.AdditiveBlending);
       // 雪宮スキル中: オレンジのオーラ
-      if (yukiTimer > 0 || yukiShooting)  spawnAuraParticle(player, 0xff7a00, THREE.AdditiveBlending);
+      if (yukiTimer > 0 || yukiSwirling)  spawnAuraParticle(player, 0xff7a00, THREE.AdditiveBlending);
     }
     if (chigiriBoostTimer > 0) {
       _ghostTimer += dt;
@@ -3166,6 +3195,7 @@ function clearCharFx() {
   for (const b of barouBolts)    { scene.remove(b.line); b.line.geometry.dispose(); b.line.material.dispose(); }
   for (const k of kaizerBeams)   { for (const m of k.meshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } }
   auraParticles.length = 0; charGhosts.length = 0; barouBolts.length = 0; kaizerBeams.length = 0;
+  clearYukiSwirl();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -3974,7 +4004,7 @@ function animate() {
   if (gameStarted && !isGoalScene) updateBachira(dt);
   if (gameStarted && !isGoalScene) updateShidouSkill(dt);
   if (gameStarted && !isGoalScene) updateYukimiyaSkill(dt);
-  if (gameStarted && !isGoalScene) updateYukimiyaShot(dt);
+  updateYukimiyaSwirl(dt);
 
   if (gameStarted) {
   if (!isGoalScene) {
