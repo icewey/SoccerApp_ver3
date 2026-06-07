@@ -619,13 +619,13 @@ function updateShidouSkill(dt) {
 
 // 雪宮: ドリブルからのジャイロシュート（3モーション連結）。
 //  01: 進行方向の左斜め前(45°)へ進む / 02: 右斜め前(45°)へ切り込み /
-//  03: 左斜め前へ蹴り上げ → 最高点後は右へ曲がる弧（下が弧）を描いて右下へ。
+//  03: 前方へ蹴り出す → 飛行中に左へ曲がる単純な左カーブシュート。
 //      ボール軌道にはオレンジの回転する渦巻きエフェクト。
 const YUKI_BLEND      = 0.1;
 const YUKI_MOVE_SPEED = 9;     // 01/02 のドリブル移動速度
-const YUKI_POWER      = 17;    // 蹴り出しの水平初速
-const YUKI_LIFT       = 15;    // 上向き初速（高い最高点）
-const YUKI_CURVE      = -1.5;  // 最高点後に右へ曲げるカーブ（マグナス。負=右へ）
+const YUKI_POWER      = 24;    // 蹴り出しの水平初速
+const YUKI_LIFT       = 9;     // 上向き初速（通常のシュート弧）
+const YUKI_CURVE      = 1.1;   // 左へ曲げるカーブ（マグナス。正=左へ）
 let yukiTimer = 0, yukiTotal = 0, yukiT1 = 0, yukiT2 = 0, yukiContactT = 0;
 let yukiKicked = false, yukiAngle = 0;
 // オレンジの回転渦巻きエフェクト（飛行中、ボール周りを回りながら出す）
@@ -690,15 +690,13 @@ function updateYukimiyaSkill(dt) {
     // 03前半: 蹴る直前までボール保持
     yukiHoldBallAtFeet();
   } else if (!yukiKicked) {
-    // 03接触: 左斜め前(45°)へ蹴り上げ。最高点後は右へ曲がる弧を描いて右下へ（重力＋カーブ）。
+    // 03接触: 前方へ蹴り出し → 飛行中に左へ曲がる単純な左カーブシュート。
     yukiKicked = true;
-    const sFwd  = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
-    const sLeft = new THREE.Vector3(-Math.cos(yukiAngle), 0,  Math.sin(yukiAngle));
-    const dir   = sFwd.clone().add(sLeft).normalize();          // 左斜め前(45°)
+    const dir = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle)); // 前方
     ballOwner = 'none'; isDribbling = false; ballSpin.set(0, 0, 0);
-    ballMesh.position.set(player.position.x + dir.x * 0.4, BALL_R + 0.3, player.position.z + dir.z * 0.4);
+    ballMesh.position.set(player.position.x + dir.x * 0.5, BALL_R + 0.1, player.position.z + dir.z * 0.5);
     ballVel.set(dir.x * YUKI_POWER, YUKI_LIFT, dir.z * YUKI_POWER);
-    ballCurveRate = YUKI_CURVE;                                 // 飛行中に右へ曲げる
+    ballCurveRate = YUKI_CURVE;                                 // 飛行中に左へ曲げる
     setBallTrail([0xff7a00, 0xffc04a], THREE.AdditiveBlending); // オレンジの軌道
     yukiSwirling = true; yukiSwirlT = 0; yukiSwirlPhase = 0;    // 渦巻きエフェクト開始
   }
