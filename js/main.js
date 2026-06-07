@@ -513,10 +513,12 @@ function buildReoSkillButtons() {
   const single    = document.getElementById('btn-skill');
   if (!container) return;
   container.innerHTML = '';
+  // 表示/非表示は updateMobileButtons() が毎フレーム制御（ボール保持時のみ表示）。
+  // ここではボタンの中身だけ構築する。
   if (!isReo()) { container.style.display = 'none'; if (single) single.style.display = ''; return; }
 
   if (single) single.style.display = 'none';
-  container.style.display = 'flex';
+  container.style.display = 'none'; // 初期は隠す（保持時に updateMobileButtons が flex に）
   reoSkills.forEach((entry, i) => {
     const btn = document.createElement('div');
     btn.className = 'reo-skill-btn';
@@ -4497,7 +4499,16 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
       if (el) el.style.display = hasBall ? '' : 'none';
     });
     if (tackleBtn) tackleBtn.style.display = hasBall ? 'none' : '';
-    if (skillBtn)  skillBtn.style.display  = hasBall ? '' : 'none';
+    // 玲王: 通常スキルボタンは使わず常に隠し、敵キャラ分のボタン群(#reo-skills)を
+    // ボール保持中だけ表示する（通常スキルボタンと同じ出現条件）。
+    const reoEl = document.getElementById('reo-skills');
+    if (isReo()) {
+      if (skillBtn) skillBtn.style.display = 'none';
+      if (reoEl)    reoEl.style.display = hasBall ? 'flex' : 'none';
+    } else {
+      if (skillBtn) skillBtn.style.display = hasBall ? '' : 'none';
+      if (reoEl)    reoEl.style.display = 'none';
+    }
     // パスボタン: 自分保持中=「パス」、味方保持中=「パス要求」。それ以外は非表示。
     // #btn-pass はCSSで display:none を指定しているため、表示時は明示的に flex を入れる
     // （'' だとCSSのnoneに戻り、ボタンが出ないため）。
