@@ -623,10 +623,11 @@ function updateShidouSkill(dt) {
 //      ボール軌道にはオレンジの回転する渦巻きエフェクト。
 const YUKI_BLEND      = 0.1;
 const YUKI_MOVE_SPEED = 9;     // 01/02 のドリブル移動速度
-const YUKI_POWER      = 38;    // 蹴り出しの水平初速（高速）
+const YUKI_POWER      = 24;    // 蹴り出しの水平初速
 const YUKI_LIFT       = 9;     // 上向き初速（通常のシュート弧）
 const YUKI_CURVE      = 1.1;   // 左へ曲げるカーブ（マグナス。正=左へ）
-let yukiBounceTimer   = 0;     // >0 の間、最初の地面バウンドで水平方向を逆向きにする
+const YUKI_BOUNCE_SPD = 0.6;   // バウンド時に残す水平速度の割合
+let yukiBounceTimer   = 0;     // >0 の間、最初の地面バウンドで左斜め前へ跳ねさせる
 let yukiTimer = 0, yukiTotal = 0, yukiT1 = 0, yukiT2 = 0, yukiContactT = 0;
 let yukiKicked = false, yukiAngle = 0;
 // オレンジの回転渦巻きエフェクト（飛行中、ボール周りを回りながら出す）
@@ -1294,10 +1295,14 @@ function ballLoosePhysics(dt) {
     const bounced = ballVel.y < -0.5;
     ballVel.y = bounced ? ballVel.y * -BALL_BOUNCE : 0;
     ballCurveRate = 0; // 着地でカーブ終了
-    // 雪宮スキル: 最初の地面バウンドで水平方向を逆向きに（バウンド方向を反転）
+    // 雪宮スキル: 最初の地面バウンドで「気持ち左斜め前」へ跳ねさせる
     if (bounced && yukiBounceTimer > 0) {
-      ballVel.x = -ballVel.x;
-      ballVel.z = -ballVel.z;
+      const hsp = Math.hypot(ballVel.x, ballVel.z) * YUKI_BOUNCE_SPD;
+      const flx = -Math.sin(yukiAngle) - Math.cos(yukiAngle); // sFwd.x + sLeft.x（左斜め前）
+      const flz = -Math.cos(yukiAngle) + Math.sin(yukiAngle); // sFwd.z + sLeft.z
+      const fl  = Math.hypot(flx, flz) || 1;
+      ballVel.x = (flx / fl) * hsp;
+      ballVel.z = (flz / fl) * hsp;
       yukiBounceTimer = 0;
     }
     const f = Math.pow(BALL_GRND_FRIC, dt);
