@@ -619,14 +619,14 @@ function updateShidouSkill(dt) {
 
 // 雪宮: ドリブルからのジャイロシュート（3モーション連結）。
 //  01: 進行方向の左斜め前(45°)へ進む / 02: 右斜め前(45°)へ切り込み /
-//  03: 前方へ蹴り出す → 飛行中に左へ曲がる単純な左カーブシュート。
+//  03: 普通のカーブシュートのミラー軌道（左へ蹴り出し→右へ曲がる）。
 //      ボール軌道にはオレンジの回転する渦巻きエフェクト。
+//      地面バウンド時は物理法則を無視して左斜め前へ跳ねる。
 const YUKI_BLEND      = 0.1;
 const YUKI_MOVE_SPEED = 9;     // 01/02 のドリブル移動速度
-const YUKI_POWER      = 24;    // 蹴り出しの水平初速
-const YUKI_LIFT       = 9;     // 上向き初速（通常のシュート弧）
-const YUKI_CURVE      = 1.1;   // 左へ曲げるカーブ（マグナス。正=左へ）
-const YUKI_BOUNCE_SPD = 0.6;   // バウンド時に残す水平速度の割合
+const YUKI_PWR        = 1.7;   // カーブシュート相当の威力（charge の power に相当）
+const YUKI_BOUNCE_SPD = 14;    // バウンド時の左斜め前への水平速度（物理無視・固定）
+const YUKI_BOUNCE_VY  = 5;     // バウンド時の上向き初速
 let yukiBounceTimer   = 0;     // >0 の間、最初の地面バウンドで左斜め前へ跳ねさせる
 let yukiTimer = 0, yukiTotal = 0, yukiT1 = 0, yukiT2 = 0, yukiContactT = 0;
 let yukiKicked = false, yukiAngle = 0;
@@ -692,16 +692,21 @@ function updateYukimiyaSkill(dt) {
     // 03前半: 蹴る直前までボール保持
     yukiHoldBallAtFeet();
   } else if (!yukiKicked) {
-    // 03接触: 前方へ蹴り出し → 飛行中に左へ曲がる単純な左カーブシュート。
+    // 03接触: 普通のカーブシュート(右へ蹴り出し→左へ曲がる)のミラー。
+    //         左へ蹴り出し → 右へ曲がる。kickBall のカーブ式をミラーで再現。
     yukiKicked = true;
-    const dir = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle)); // 前方
+    const pwr       = YUKI_PWR;
+    const kickAngle = yukiAngle + Math.PI / 8;        // 左へ蹴り出し（通常は -π/8 のミラー）
+    const CURVE_VY  = 11.1;
+    const hSpd      = 13 * pwr * ((11 + 4 * pwr) / CURVE_VY);
+    const fwd       = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
     ballOwner = 'none'; isDribbling = false; ballSpin.set(0, 0, 0);
-    ballMesh.position.set(player.position.x + dir.x * 0.5, BALL_R + 0.1, player.position.z + dir.z * 0.5);
-    ballVel.set(dir.x * YUKI_POWER, YUKI_LIFT, dir.z * YUKI_POWER);
-    ballCurveRate = YUKI_CURVE;                                 // 飛行中に左へ曲げる
+    ballMesh.position.set(player.position.x + fwd.x * 0.5, BALL_R + 0.1, player.position.z + fwd.z * 0.5);
+    ballVel.set(-Math.sin(kickAngle) * hSpd, CURVE_VY, -Math.cos(kickAngle) * hSpd);
+    ballCurveRate = -1.1;                                       // 右へ曲げる（通常 +1.1 のミラー）
     setBallTrail([0xff7a00, 0xffc04a], THREE.AdditiveBlending); // オレンジの軌道
     yukiSwirling = true; yukiSwirlT = 0; yukiSwirlPhase = 0;    // 渦巻きエフェクト開始
-    yukiBounceTimer = 3.0;                                      // 次の地面バウンドで逆向きに
+    yukiBounceTimer = 3.0;                                      // 次の地面バウンドで左斜め前へ跳ねる
   }
 }
 
@@ -1295,14 +1300,14 @@ function ballLoosePhysics(dt) {
     const bounced = ballVel.y < -0.5;
     ballVel.y = bounced ? ballVel.y * -BALL_BOUNCE : 0;
     ballCurveRate = 0; // 着地でカーブ終了
-    // 雪宮スキル: 最初の地面バウンドで「気持ち左斜め前」へ跳ねさせる
+    // 雪宮スキル: 最初の地面バウンドで物理法則を無視して左斜め前へ跳ねる（固定ベクトル）
     if (bounced && yukiBounceTimer > 0) {
-      const hsp = Math.hypot(ballVel.x, ballVel.z) * YUKI_BOUNCE_SPD;
       const flx = -Math.sin(yukiAngle) - Math.cos(yukiAngle); // sFwd.x + sLeft.x（左斜め前）
       const flz = -Math.cos(yukiAngle) + Math.sin(yukiAngle); // sFwd.z + sLeft.z
       const fl  = Math.hypot(flx, flz) || 1;
-      ballVel.x = (flx / fl) * hsp;
-      ballVel.z = (flz / fl) * hsp;
+      ballVel.x = (flx / fl) * YUKI_BOUNCE_SPD;
+      ballVel.z = (flz / fl) * YUKI_BOUNCE_SPD;
+      ballVel.y = YUKI_BOUNCE_VY; // 軽く上へ跳ねる
       yukiBounceTimer = 0;
     }
     const f = Math.pow(BALL_GRND_FRIC, dt);
