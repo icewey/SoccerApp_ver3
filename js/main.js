@@ -623,9 +623,11 @@ function updateShidouSkill(dt) {
 //      ボール軌道にはオレンジの回転する渦巻きエフェクト。
 //      地面バウンド時は物理法則を無視して左斜め前へ跳ねる。
 const YUKI_BLEND      = 0.1;
-const YUKI_DIST_01    = 3;     // 01(右移動)の移動距離(m)
-const YUKI_DIST_02    = 5;     // 02(前方sprint)の移動距離(m)
+const YUKI_DASH_SPEED = 55;    // 01/02 の移動速度（通常RUN_SPEED=11の5倍）
+const YUKI_DIST_01    = 3;     // 01(右移動)の最大移動距離(m)
+const YUKI_DIST_02    = 5;     // 02(前方sprint)の最大移動距離(m)
 const YUKI_SPRINT_DUR = 0.5;   // 02(sprint)を流す時間（秒）
+let yukiMoveAccum = 0, yukiMovePhase = -1; // 現フェーズの移動距離・番号（距離キャップ用）
 const YUKI_PWR        = 1.7;   // カーブシュート相当の威力（charge の power に相当）
 const YUKI_BOUNCE_SPD = 14;    // バウンド時の左斜め前への水平速度（物理無視・固定）
 const YUKI_BOUNCE_VY  = 5;     // バウンド時の上向き初速
@@ -668,6 +670,7 @@ function yukimiyaGyro() {
   yukiContactT = yukiT2 + Math.min(c3.duration * 0.4, 0.45);    // 03の蹴り接触
   yukiTimer    = yukiTotal;
   yukiKicked   = false;
+  yukiMovePhase = -1; yukiMoveAccum = 0; // 移動距離キャップをリセット
   playerPickupCooldown = combo.duration + 0.2;
   enemyPickupCooldown  = combo.duration + 0.2;
   ballOwner = 'none'; isDribbling = false; // ボールは updateYukimiyaSkill が駆動
@@ -683,15 +686,17 @@ function updateYukimiyaSkill(dt) {
   const right = new THREE.Vector3(Math.cos(yukiAngle), 0, -Math.sin(yukiAngle));
 
   if (e < yukiT1) {
-    // 01: 右へ約3m（01フェーズ全体で割った一定速度）
-    const sp = YUKI_DIST_01 / Math.max(0.05, yukiT1);
-    player.position.addScaledVector(right, sp * dt);
+    // 01: 右へ移動（5倍速。最大3mで打ち止め）
+    if (yukiMovePhase !== 0) { yukiMovePhase = 0; yukiMoveAccum = 0; }
+    const step = Math.min(YUKI_DASH_SPEED * dt, YUKI_DIST_01 - yukiMoveAccum);
+    if (step > 0) { player.position.addScaledVector(right, step); yukiMoveAccum += step; }
     charClampToField(playerChar);
     yukiHoldBallAtFeet();
   } else if (e < yukiT2) {
-    // 02: 正面へ約5m（02フェーズ全体で割った一定速度）
-    const sp = YUKI_DIST_02 / Math.max(0.05, yukiT2 - yukiT1);
-    player.position.addScaledVector(fwd, sp * dt);
+    // 02: 正面へ移動（5倍速。最大5mで打ち止め）
+    if (yukiMovePhase !== 1) { yukiMovePhase = 1; yukiMoveAccum = 0; }
+    const step = Math.min(YUKI_DASH_SPEED * dt, YUKI_DIST_02 - yukiMoveAccum);
+    if (step > 0) { player.position.addScaledVector(fwd, step); yukiMoveAccum += step; }
     charClampToField(playerChar);
     yukiHoldBallAtFeet();
   } else if (e < yukiContactT) {
