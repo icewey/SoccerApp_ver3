@@ -618,12 +618,13 @@ function updateShidouSkill(dt) {
 }
 
 // 雪宮: ドリブルからのジャイロシュート（3モーション連結）。
-//  01: 進行方向の左斜め前(45°)へ進む / 02: 右斜め前(45°)へ切り込み /
+//  01: 右へ移動(移動速度2倍) / 02: sprintで正面へ移動(2倍・0.5秒のみ) /
 //  03: 普通のカーブシュートのミラー軌道（左へ蹴り出し→右へ曲がる）。
 //      ボール軌道にはオレンジの回転する渦巻きエフェクト。
 //      地面バウンド時は物理法則を無視して左斜め前へ跳ねる。
 const YUKI_BLEND      = 0.1;
-const YUKI_MOVE_SPEED = 9;     // 01/02 のドリブル移動速度
+const YUKI_DASH_SPEED = 22;    // 01/02 の移動速度（通常RUN_SPEED=11の2倍）
+const YUKI_SPRINT_DUR = 0.5;   // 02(sprint)を流す時間（秒）
 const YUKI_PWR        = 1.7;   // カーブシュート相当の威力（charge の power に相当）
 const YUKI_BOUNCE_SPD = 14;    // バウンド時の左斜め前への水平速度（物理無視・固定）
 const YUKI_BOUNCE_VY  = 5;     // バウンド時の上向き初速
@@ -645,7 +646,12 @@ function yukimiyaGyro() {
   if (ballOwner !== 'player') return;
   const c1 = clips['yuki01'], c2 = clips['yuki02'], c3 = clips['yuki03'];
   if (!c1 || !c2 || !c3 || !mixer) { startKick(false, 0, 1.8); return; } // 素材が無ければ通常シュート
-  if (!clips['yukimiya_gyro']) buildComboClip('yukimiya_gyro', ['yuki01', 'yuki02', 'yuki03'], YUKI_BLEND);
+  // 02(sprint)は YUKI_SPRINT_DUR 秒だけ流す（先頭をトリム）
+  if (!clips['yuki02_short']) {
+    clips['yuki02_short'] = THREE.AnimationUtils.subclip(c2, 'yuki02_short', 0, Math.round(YUKI_SPRINT_DUR * 30), 30);
+  }
+  const c2s = clips['yuki02_short'];
+  if (!clips['yukimiya_gyro']) buildComboClip('yukimiya_gyro', ['yuki01', 'yuki02_short', 'yuki03'], YUKI_BLEND);
   const combo = clips['yukimiya_gyro'];
   if (!combo) { startKick(false, 0, 1.8); return; }
 
@@ -656,8 +662,8 @@ function yukimiyaGyro() {
 
   yukiAngle    = player.rotation.y;
   yukiTotal    = combo.duration;
-  yukiT1       = c1.duration + YUKI_BLEND;                       // 01→02 切替
-  yukiT2       = yukiT1 + c2.duration + YUKI_BLEND;              // 02→03 切替
+  yukiT1       = c1.duration + YUKI_BLEND;                       // 01(右移動)→02(sprint) 切替
+  yukiT2       = yukiT1 + c2s.duration + YUKI_BLEND;             // 02(sprint)→03(シュート) 切替
   yukiContactT = yukiT2 + Math.min(c3.duration * 0.4, 0.45);    // 03の蹴り接触
   yukiTimer    = yukiTotal;
   yukiKicked   = false;
@@ -666,7 +672,7 @@ function yukimiyaGyro() {
   ballOwner = 'none'; isDribbling = false; // ボールは updateYukimiyaSkill が駆動
 }
 
-// 雪宮スキルの毎フレーム駆動。01左斜め前(45°)→02右斜め前(45°)→03で前方へ蹴り出し。
+// 雪宮スキルの毎フレーム駆動。01=右移動(2倍)→02=sprintで正面移動(2倍)→03でシュート。
 function updateYukimiyaSkill(dt) {
   if (yukiTimer <= 0) return;
   yukiTimer -= dt;
@@ -674,18 +680,15 @@ function updateYukimiyaSkill(dt) {
   player.position.y = groundY;
   const fwd   = new THREE.Vector3(-Math.sin(yukiAngle), 0, -Math.cos(yukiAngle));
   const right = new THREE.Vector3(Math.cos(yukiAngle), 0, -Math.sin(yukiAngle));
-  const left  = right.clone().multiplyScalar(-1);
 
   if (e < yukiT1) {
-    // 01: 左斜め前（45°）へドリブル
-    const dir = fwd.clone().add(left).normalize();
-    player.position.addScaledVector(dir, YUKI_MOVE_SPEED * dt);
+    // 01: 右へ移動（移動速度2倍）
+    player.position.addScaledVector(right, YUKI_DASH_SPEED * dt);
     charClampToField(playerChar);
     yukiHoldBallAtFeet();
   } else if (e < yukiT2) {
-    // 02: 右斜め前（45°）へ切り込み
-    const dir = fwd.clone().add(right).normalize();
-    player.position.addScaledVector(dir, YUKI_MOVE_SPEED * dt);
+    // 02: sprintで正面へ移動（移動速度2倍・0.5秒のみ）
+    player.position.addScaledVector(fwd, YUKI_DASH_SPEED * dt);
     charClampToField(playerChar);
     yukiHoldBallAtFeet();
   } else if (e < yukiContactT) {
@@ -2274,9 +2277,10 @@ const ANIM_FILES = [
   // カイザーの固有スキル「超高速ストレートシュート」用
   ['kaizer_impact', './キャラ/カイザー的なキャラ/Skill/kaizer_Impact.fbx'],
   // 雪宮の固有スキル「ジャイロシュート」用（3モーション連結）
-  ['yuki01', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/シザーズ01.fbx'],
-  ['yuki02', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/シザーズ02.fbx'],
-  ['yuki03', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/シザーズ03.fbx'],
+  //  01=右移動 / 02=sprint前方(0.5sのみ) / 03=シュート
+  ['yuki01', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/01_右移動.fbx'],
+  ['yuki02', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/02_sprint前方.fbx'],
+  ['yuki03', './キャラ/雪宮的なキャラ/Skill/ジャイロシュート/03_シュート.fbx'],
   // セットプレー用（スローイン / コーナーキック）
   ['throw_in',    './animations/Throw In.fbx'],
   ['corner_kick', './animations/CornerKick.fbx'],
