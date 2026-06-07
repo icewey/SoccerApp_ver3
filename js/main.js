@@ -623,9 +623,10 @@ function updateShidouSkill(dt) {
 //      ボール軌道にはオレンジの回転する渦巻きエフェクト。
 const YUKI_BLEND      = 0.1;
 const YUKI_MOVE_SPEED = 9;     // 01/02 のドリブル移動速度
-const YUKI_POWER      = 24;    // 蹴り出しの水平初速
+const YUKI_POWER      = 38;    // 蹴り出しの水平初速（高速）
 const YUKI_LIFT       = 9;     // 上向き初速（通常のシュート弧）
 const YUKI_CURVE      = 1.1;   // 左へ曲げるカーブ（マグナス。正=左へ）
+let yukiBounceTimer   = 0;     // >0 の間、最初の地面バウンドで水平方向を逆向きにする
 let yukiTimer = 0, yukiTotal = 0, yukiT1 = 0, yukiT2 = 0, yukiContactT = 0;
 let yukiKicked = false, yukiAngle = 0;
 // オレンジの回転渦巻きエフェクト（飛行中、ボール周りを回りながら出す）
@@ -699,6 +700,7 @@ function updateYukimiyaSkill(dt) {
     ballCurveRate = YUKI_CURVE;                                 // 飛行中に左へ曲げる
     setBallTrail([0xff7a00, 0xffc04a], THREE.AdditiveBlending); // オレンジの軌道
     yukiSwirling = true; yukiSwirlT = 0; yukiSwirlPhase = 0;    // 渦巻きエフェクト開始
+    yukiBounceTimer = 3.0;                                      // 次の地面バウンドで逆向きに
   }
 }
 
@@ -713,6 +715,7 @@ function spawnYukiSwirlParticle(pos, color) {
   yukiSwirl.push({ mesh, life: 0, maxLife: 0.32 + Math.random() * 0.12 });
 }
 function updateYukimiyaSwirl(dt) {
+  if (yukiBounceTimer > 0) yukiBounceTimer -= dt; // バウンド反転の有効時間（毎フレーム減衰）
   if (yukiSwirling) {
     yukiSwirlT     += dt;
     yukiSwirlPhase += dt * 22; // 回転スピード
@@ -1288,8 +1291,15 @@ function ballLoosePhysics(dt) {
 
   if (ballMesh.position.y <= BALL_R) {
     ballMesh.position.y = BALL_R;
-    ballVel.y = ballVel.y < -0.5 ? ballVel.y * -BALL_BOUNCE : 0;
+    const bounced = ballVel.y < -0.5;
+    ballVel.y = bounced ? ballVel.y * -BALL_BOUNCE : 0;
     ballCurveRate = 0; // 着地でカーブ終了
+    // 雪宮スキル: 最初の地面バウンドで水平方向を逆向きに（バウンド方向を反転）
+    if (bounced && yukiBounceTimer > 0) {
+      ballVel.x = -ballVel.x;
+      ballVel.z = -ballVel.z;
+      yukiBounceTimer = 0;
+    }
     const f = Math.pow(BALL_GRND_FRIC, dt);
     ballVel.x *= f;
     ballVel.z *= f;
@@ -1865,7 +1875,7 @@ function mpResetAfterGoal() {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
-  yukiTimer = 0; yukiSwirling = false;
+  yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -1984,7 +1994,7 @@ function resetAfterGoal(scorer) {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
-  yukiTimer = 0; yukiSwirling = false;
+  yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -2150,7 +2160,7 @@ function pkPlaceForKick() {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
-  yukiTimer = 0; yukiSwirling = false;
+  yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
@@ -2419,7 +2429,7 @@ export function startGame(config) {
   bachiraSkillTimer = 0;
   barouSkillTimer = 0;
   shidouJumpTimer = 0;
-  yukiTimer = 0; yukiSwirling = false;
+  yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
   clearCharFx();
   cancelCharge();
