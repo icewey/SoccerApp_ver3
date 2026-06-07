@@ -623,6 +623,7 @@ function updateShidouSkill(dt) {
 //      ボール軌道にはオレンジの回転する渦巻きエフェクト。
 //      地面バウンド時は物理法則を無視して左斜め前へ跳ねる。
 const YUKI_BLEND      = 0.1;
+const YUKI_SPEED      = 1.8;   // 一連のモーション再生速度（大きいほど速い）
 const YUKI_DIST_01    = 3;     // 01(右移動)の移動距離(m)。フェーズ全体で連続移動
 const YUKI_DIST_02    = 5;     // 02(前方sprint)の移動距離(m)。フェーズ全体で連続移動
 const YUKI_01_DUR     = 0.4;   // 01(右移動)を流す時間（秒）。短めにして繋ぎを軽快に
@@ -662,18 +663,20 @@ function yukimiyaGyro() {
 
   endSpin();
   isKicking = true;
-  kickTimer = combo.duration + 0.1;
   fadeToClip('yukimiya_gyro', false);
+  mixer.clipAction(clips['yukimiya_gyro']).setEffectiveTimeScale(YUKI_SPEED); // 一連を速く再生
+  kickTimer = combo.duration / YUKI_SPEED + 0.1;
 
+  // 各タイミングは再生速度に合わせて短縮（移動距離は固定なので速くなる）
   yukiAngle    = player.rotation.y;
-  yukiTotal    = combo.duration;
-  yukiT1       = c1s.duration + YUKI_BLEND;                      // 01(右移動)→02(sprint) 切替
-  yukiT2       = yukiT1 + c2s.duration + YUKI_BLEND;             // 02(sprint)→03(シュート) 切替
-  yukiContactT = yukiT2 + Math.min(c3.duration * 0.4, 0.45);    // 03の蹴り接触
+  yukiTotal    = combo.duration / YUKI_SPEED;
+  yukiT1       = (c1s.duration + YUKI_BLEND) / YUKI_SPEED;                   // 01→02 切替
+  yukiT2       = yukiT1 + (c2s.duration + YUKI_BLEND) / YUKI_SPEED;          // 02→03 切替
+  yukiContactT = yukiT2 + Math.min(c3.duration * 0.4, 0.45) / YUKI_SPEED;   // 03の蹴り接触
   yukiTimer    = yukiTotal;
   yukiKicked   = false;
-  playerPickupCooldown = combo.duration + 0.2;
-  enemyPickupCooldown  = combo.duration + 0.2;
+  playerPickupCooldown = yukiTotal + 0.2;
+  enemyPickupCooldown  = yukiTotal + 0.2;
   ballOwner = 'none'; isDribbling = false; // ボールは updateYukimiyaSkill が駆動
 }
 
