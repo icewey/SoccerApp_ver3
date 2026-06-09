@@ -3838,9 +3838,10 @@ function triggerThrowIn() {
   const xPos  = Math.max(-(FIELD_HALF_W - 1), Math.min(FIELD_HALF_W - 1, ballMesh.position.x));
   const awarded = lastTouchTeam === 'A' ? 'B' : 'A'; // 最後に触れた逆チームがスロー
   clearBallMotion();
-  // 蹴り手はタッチラインの外に立たせ、フィールド内側を向く
+  // 蹴り手はタッチラインの外に立たせ、自チームの攻撃方向(=味方がいる方)を向く
   const taker = { x: xPos, z: zSign * (FIELD_HALF_D + 1.0) };
-  const faceRy = zSign > 0 ? 0 : Math.PI;
+  // A=+X攻撃 → +X向き(ry=-PI/2) / B=-X攻撃 → -X向き(ry=+PI/2)
+  const faceRy = awarded === 'A' ? -Math.PI / 2 : Math.PI / 2;
   if (awarded === 'A') startPlayerSetPiece('throwin', taker, faceRy);
   else                 startOpponentSetPiece('throwin', taker, faceRy);
 }
@@ -3919,7 +3920,7 @@ function repositionForSetPiece(kind, takerKey, takerPos) {
 // 共通セットプレー開始: 告知（メッセージ＋画面遷移）→再配置→準備（モーション）→実施
 function beginSetPiece(kind, takerKey, takerPos, faceRy) {
   setPiece = { kind, takerKey, phase: 'announce', timer: ANNOUNCE_TIME, ready: false,
-               takerPos: { x: takerPos.x, z: takerPos.z } };
+               takerPos: { x: takerPos.x, z: takerPos.z }, faceRy };
   const tg = takerKey === 'player' ? player : entity2(takerKey).group;
   tg.position.set(takerPos.x, groundY, takerPos.z);
   tg.rotation.y = faceRy;
@@ -3963,23 +3964,27 @@ function updateSetPiecePhase(dt) {
   }
 }
 
-// ボールを対象へ蹴り出す（コーナー=カーブして蹴り上げ / スロー=ふわり投げ）
-function launchSetPieceBall(from, target, kind) {
-  const dir  = new THREE.Vector3(target.x - from.x, 0, target.z - from.z);
-  const dist = Math.max(1, dir.length()); dir.normalize();
+// ボールを受け手へカーブ軌道でパス（コーナー=高め / スロー=低め、どちらも巻く）。
+// 受け手に届かせるため、初速方向をカーブと逆に半分プリ回転し、カーブで戻して到達させる。
+function launchSetPieceBall(from, target, kind, atkGoalX) {
+  const dx = target.x - from.x, dz = target.z - from.z;
+  const dist = Math.max(2, Math.hypot(dx, dz));
+  const aStraight = Math.atan2(dx, dz); // +z基準で+x方向への角度（Magnusと同系）
   ballOwner = 'none'; isDribbling = false;
-  if (kind === 'corner') {
-    const hSpd = Math.min(26, Math.max(14, dist * 0.95));
-    ballMesh.position.set(from.x + dir.x * 0.5, BALL_R + 0.1, from.z + dir.z * 0.5);
-    ballVel.set(dir.x * hSpd, 11, dir.z * hSpd);
-    ballCurveRate = (Math.random() < 0.5 ? 1 : -1) * 0.5;
-    setBallTrail([0x3da5ff], THREE.AdditiveBlending);
-  } else {
-    const hSpd = Math.min(18, Math.max(9, dist * 0.85));
-    ballMesh.position.set(from.x + dir.x * 0.4, 1.4, from.z + dir.z * 0.4);
-    ballVel.set(dir.x * hSpd, 7, dir.z * hSpd);
-    ballCurveRate = 0;
-  }
+  const lofted  = kind === 'corner';
+  const vy      = lofted ? 12 : 7;                       // コーナー=高めのクロス / スロー=低め
+  const flightT = 2 * vy / BALL_GRAVITY;                 // 着地までの概算時間
+  const hSpd    = Math.min(lofted ? 38 : 30, Math.max(11, dist / Math.max(0.35, flightT)));
+  // カーブ向き: 攻撃ゴール側(中央)へ巻く。立ち位置zの符号×攻撃方向で決定。
+  const cmag    = lofted ? 0.6 : 0.85;
+  const curve   = cmag * (Math.sign(from.z) || 1) * (Math.sign(atkGoalX ?? GOAL_X) || 1);
+  const aInit   = aStraight - 0.5 * curve * flightT;     // 逆に半分プリ回転
+  const sx = Math.sin(aInit), sz = Math.cos(aInit);
+  const startY = lofted ? BALL_R + 0.1 : 1.3;
+  ballMesh.position.set(from.x + sx * 0.5, startY, from.z + sz * 0.5);
+  ballVel.set(sx * hSpd, vy, sz * hSpd);
+  ballCurveRate = curve;
+  setBallTrail([0x3da5ff, 0x9fe0ff], THREE.AdditiveBlending);
 }
 
 // CPUの蹴り手が3秒後に自動実行。
@@ -3996,7 +4001,7 @@ function cpuSetPieceAct() {
   // スローインは必ずパス: 味方がいなければ前方スペースへ投げる
   if (!target && kind === 'throwin') target = new THREE.Vector3(from.x + sgn * 10, 0, from.z * 0.4);
   if (target) {
-    launchSetPieceBall(from, target, kind);
+    launchSetPieceBall(from, target, kind, sgn * GOAL_X);
     playerPickupCooldown = 0.4; // 受け手(敵)が拾いやすいよう一瞬プレイヤーを抑える
   } else {
     // コーナーで味方なし → ドリブル開始
@@ -4039,10 +4044,11 @@ function setPiecePass() {
   setPiece = null;
   hideSetPieceUI();
   const from = player.position;
+  // プレイヤーチーム(A)は+X攻撃。味方がいればそこへ、いなければ攻撃方向の前方スペースへ。
   const target = mate
     ? mate.group.position.clone()
-    : new THREE.Vector3(from.x + (player.rotation.y < 0 ? 8 : -8), 0, from.z);
-  launchSetPieceBall(from, target, kind);
+    : new THREE.Vector3(from.x + 10, 0, from.z * 0.4);
+  launchSetPieceBall(from, target, kind, GOAL_X);
   enemyPickupCooldown = 0.4; // 受け手が拾いやすいよう一瞬敵を抑える
   lastTouchTeam = 'A';
 }
@@ -4337,6 +4343,14 @@ function animate() {
     }
     camLead.lerp(desiredLead, Math.min(1, 6 * dt)); // 進行方向へ素早く寄せる/戻す
     _prevPlayerPos.copy(player.position);
+
+    // セットプレー(自分が蹴り手): カメラを蹴り手の後ろに置き、向いている方向
+    // (=味方/攻撃方向)を見る。viewAngle を faceRy へ寄せると camOffset が背後に回る。
+    if (setPiece && setPiece.takerKey === 'player') {
+      const d = ((setPiece.faceRy - viewAngle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      viewAngle += d * Math.min(1, 8 * dt);
+      camLead.set(0, 0, 0); // 蹴り手は静止。リードを切ってブレを防ぐ
+    }
 
     // カメラ追従: ターゲット位置をスムーズに追い、そこから固定オフセット分で配置
     // （位置を直接 lerp するとカメラがプレイヤーに近づくズームが起きるため避ける）
