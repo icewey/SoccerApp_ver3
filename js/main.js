@@ -514,9 +514,9 @@ function useReoSkill(idx) {
 function computeReoSkills(config) {
   if (SKILL_BY_CHAR[config.charId] !== 'reo_copy') return [];
   const ids = [];
-  if (config.mode2v2) {
-    if (config.enemy1Id) ids.push(config.enemy1Id);
-    if (config.enemy2Id) ids.push(config.enemy2Id);
+  if (config.mode2v2 || config.mode3v3) {
+    // 2vs2=敵2人 / 3vs3=敵3人。その試合の敵キャラ分のボタンを出す。
+    for (const k of ['enemy1Id', 'enemy2Id', 'enemy3Id']) if (config[k]) ids.push(config[k]);
   } else if (config.mp) {
     if (config.mp.enemyId) ids.push(config.mp.enemyId);
   } else if (config.enemyId) {
@@ -4618,7 +4618,9 @@ function gameTouchBlocked() {
 document.addEventListener('touchstart', e => {
   if (gameTouchBlocked()) return;
   for (const t of e.changedTouches) {
-    const isBtn = t.target.closest?.('.touch-btn');
+    // 玲王のスキルボタン(.reo-skill-btn)もボタン扱い。除外しないとタップで
+    // ルックスワイプが開始し、ボタンのstopPropagationでtouchendが届かず視点が固着する。
+    const isBtn = t.target.closest?.('.touch-btn, .reo-skill-btn');
     if (t.clientX < window.innerWidth * 0.5 && !joystick.active) {
       e.preventDefault();
       joystick.active = true;
@@ -4676,8 +4678,10 @@ function releaseTouch(id) {
     lookSwipe.id = -1;
   }
 }
-document.addEventListener('touchend',    e => { for (const t of e.changedTouches) releaseTouch(t.identifier); });
-document.addEventListener('touchcancel', e => { for (const t of e.changedTouches) releaseTouch(t.identifier); });
+// キャプチャ段階で受ける: ボタンの touchend が stopPropagation してもジョイ
+// スティック/ルックスワイプの解放が必ず実行され、視点や移動の固着を防ぐ。
+document.addEventListener('touchend',    e => { for (const t of e.changedTouches) releaseTouch(t.identifier); }, true);
+document.addEventListener('touchcancel', e => { for (const t of e.changedTouches) releaseTouch(t.identifier); }, true);
 
 // ▼ アクションボタン（右半分）
 (function setupActionBtns() {
