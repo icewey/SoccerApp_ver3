@@ -1233,139 +1233,144 @@ function updateEnemy(dt) {
   }
 }
 
-// ローカルプレイヤーのボール操作（拾得・タックル・ドリブル・被タックル解放）。
-// リアル対戦専用。物理シミュとゴール判定は updateMultiplayerBall 側が担当。
-// 所有権の競合は「単一決定者」で解消する:
-//   - 保持中の手放し/被タックル → 保持者だけが決める
-//   - ルーズ拾得 → 自分で宣言（同時競合のみ Host 優先で Guest が譲る）
-//   - タックル奪取 → 近接タックルで宣言し、保持者が解放を確認して受け渡し
-function updateLocalPlayerBall(dt) {
-  if (!gameStarted || isGoalScene || gkBallHolder !== 'none') return;
-  // 千切ブースト/蜂楽スキル中は奪われず保持し続ける（シュート中は除く）
-  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0) && !isKicking) {
-    ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); return;
-  }
-
-  if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
-  if (ballGrace > 0)            ballGrace -= dt;
-
-  const remoteRole = mpRole === 'host' ? 'guest' : 'host';
-  const remoteOwns = mpRemoteBallOwner === remoteRole;
-  const TACKLE_DIST = 1.8;
-  const distPlayer = new THREE.Vector3()
-    .subVectors(ballMesh.position, player.position).setY(0).length();
-  const distRemote = new THREE.Vector3()
-    .subVectors(ballMesh.position, remotePeer.position).setY(0).length();
-
-  // 自分の所有を即時に相手へ通知（33msタイマー待ちなし）
-  const publishOwn = () => {
-    if (mpHandlers && gameStarted) mpHandlers.publishBall({
-      x: ballMesh.position.x, y: ballMesh.position.y, z: ballMesh.position.z,
-      vx: 0, vy: 0, vz: 0, owner: mpRole,
-    });
-  };
-
-  // ── 自分が保持中 ───────────────────────────────────────────────
-  if (ballOwner === 'player') {
-    // 相手のタックル成立 → 手放す（スキルモーション中は奪われない）
-    if (remoteTackling && distRemote < TACKLE_DIST && !playerSkillBusy()) {
-      ballOwner = 'none'; isDribbling = false;
-      playerPickupCooldown = 0.5; claimedViaTackle = false;
-      return;
-    }
-    // 競合: 相手も保持を主張
-    if (remoteOwns) {
-      if (claimedViaTackle && ballGrace > 0) {
-        // 奪取直後 → 相手の解放が伝播するまで保持を維持
-      } else if (mpRole === 'guest') {
-        // ルーズ同時競合は Host 優先 → Guest は譲る
-        ballOwner = 'none'; isDribbling = false;
-        playerPickupCooldown = 0.25; claimedViaTackle = false; return;
-      }
-      // host: 保持（タイブレーク）
-    }
-    // 手放し（距離 or シュート）
-    if (distPlayer >= DRIBBLE_DIST * 1.6 || (isKicking && !isPassing)) {
-      ballOwner = 'none'; isDribbling = false; claimedViaTackle = false; return;
-    }
-    // ドリブル継続
-    isDribbling = true;
-    charDribble(playerChar, dt);
-    const moving = keys.has('ArrowUp') || keys.has('KeyW') || keys.has('ArrowDown') || keys.has('KeyS')
-                || keys.has('ArrowLeft') || keys.has('KeyA') || keys.has('ArrowRight') || keys.has('KeyD');
-    if (moving) {
-      const facing  = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
-      const rollDir = (keys.has('ArrowUp') || keys.has('KeyW')) ? 1 : -1;
-      ballMesh.rotateOnWorldAxis(new THREE.Vector3(facing.z, 0, -facing.x), rollDir * RUN_SPEED * dt / BALL_R);
-    }
-    return;
-  }
-
-  // ── 非保持: タックル奪取（相手保持中でも可） ──────────────────
-  if (isTackling && distPlayer < TACKLE_DIST && playerPickupCooldown <= 0) {
-    ballOwner = 'player'; isDribbling = true;
-    ballGrace = 0.6; claimedViaTackle = true; playerPickupCooldown = 0;
-    charDribble(playerChar, dt);
-    publishOwn();
-    return;
-  }
-
-  // ── 非保持: ルーズ拾得（相手が保持していない時のみ） ──────────
-  if (!remoteOwns && distPlayer < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) {
-    ballOwner = 'player'; isDribbling = true;
-    ballGrace = 0.35; claimedViaTackle = false;
-    charDribble(playerChar, dt);
-    publishOwn();
-    return;
-  }
-
-  isDribbling = false;
-}
-
-// ── リアル対戦(1v1)のボール統括 ───────────────────────────────────
-// 権威モデル: 「最後に触れた側(iAmBallAuthority)」がボールをシミュ＆送信。
-// 非権威側は受信ボールを描画し、近接で奪取/拾得を試みる。
-// ゴール判定は Host が同期済みボール位置から一元的に行う（mpCheckGoal）。
+// ── リアル対戦(1v1): ホスト権威モデル ───────────────────────────────────
+// 計算(所有権・物理・ゴール)は全て Host が行い、Guest は入力送信＋描画のみ。
+// これで「両者が所有権を計算して取れる/取れないが食い違う」競合を根絶する。
+//  - Host : 自分とゲスト(remotePeer)の位置/タックル/スキル/キックから所有権を決定し、
+//           ボール物理を回し、owner と ボール位置を配信する。
+//  - Guest: 自分の位置/タックル/スキル/キックを送り、Host のボールを描画する。
+//           自分が保持中は足元にボールを置き（即応）、発射時はキックを Host へ転送。
 function updateMultiplayerBall(dt) {
   if (!gameStarted || goalCapture || isGoalScene) return;
   if (gkBallHolder !== 'none') { isDribbling = false; return; }
+  if (mpRole === 'host') updateMpHost(dt);
+  else                   updateMpGuest(dt);
+}
 
-  const remoteRole = mpRole === 'host' ? 'guest' : 'host';
-  const remoteOwns = mpRemoteBallOwner === remoteRole;
+// Host: 全計算。ballOwner は Host視点（'player'=Host保持 / 'enemy'=Guest保持 / 'none'=ルーズ）。
+function updateMpHost(dt) {
+  if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
+  if (enemyPickupCooldown  > 0) enemyPickupCooldown  -= dt;
 
-  if (remoteOwns) {
-    // 相手が保持/権威 → 自分は権威を手放し、受信ボールを描画
-    iAmBallAuthority = false;
-    if (ballOwner !== 'player') {
-      const bs = ballBuf.length ? ballBuf[ballBuf.length - 1] : null;
-      if (bs) { ballMesh.position.set(bs.x, bs.y, bs.z); ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0); }
-      ballOwner = 'enemy';
-    }
-    updateLocalPlayerBall(dt);                 // タックル奪取/グレース保持
-    if (ballOwner === 'player') iAmBallAuthority = true;
-  } else if (iAmBallAuthority) {
-    // 自分が権威（保持 or 直近に蹴ったルーズボール）
-    if (ballOwner === 'enemy') ballOwner = 'none';
-    updateLocalPlayerBall(dt);                 // 保持/ドリブル/拾得/タックル
-    if (ballOwner === 'none') ballLoosePhysics(dt); // ルーズ物理（キック速度を継続）
-  } else {
-    // 相手が権威のルーズボール → 補間描画しつつ拾得を試行
-    if (ballOwner === 'enemy') ballOwner = 'none';
-    if (ballOwner !== 'player') {
-      const bs = interpBuf(ballBuf, Date.now() - INTERP_DELAY);
-      if (bs) {
-        ballMesh.position.x += (bs.x - ballMesh.position.x) * Math.min(1, 22 * dt);
-        ballMesh.position.y += (bs.y - ballMesh.position.y) * Math.min(1, 22 * dt);
-        ballMesh.position.z += (bs.z - ballMesh.position.z) * Math.min(1, 22 * dt);
-        ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
-      }
-    }
-    updateLocalPlayerBall(dt);
-    if (ballOwner === 'player') iAmBallAuthority = true;
+  // Host自身の千切/蜂楽スキル中は保持し続ける（奪われない）
+  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0) && !isKicking) {
+    ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); mpCheckGoal(); return;
   }
 
-  // ゴール判定は Host が同期済み位置から一元的に行う（シミュ主体に依存しない）
-  if (mpRole === 'host') mpCheckGoal();
+  const TACKLE_DIST = 1.8;
+  const distHost  = distXZ(ballMesh.position, player.position);
+  const distGuest = distXZ(ballMesh.position, remotePeer.position);
+
+  if (ballOwner === 'player') {
+    // Host保持: ゲストのタックルで奪われる / 手放し・シュートでルーズへ
+    if (remoteTackling && distGuest < TACKLE_DIST && !playerSkillBusy()) {
+      ballOwner = 'enemy'; playerPickupCooldown = 0.5; enemyPickupCooldown = 0;
+    } else if (distHost >= DRIBBLE_DIST * 1.6 || (isKicking && !isPassing)) {
+      ballOwner = 'none';
+    }
+  } else if (ballOwner === 'enemy') {
+    // Guest保持: Hostのタックルで奪う / ゲストが大きく離したらルーズへ
+    // （ゲストのキックは applyGuestKick が owner='none' にする）
+    if (isTackling && distGuest < TACKLE_DIST && !remoteSkillBusy) {
+      ballOwner = 'player'; enemyPickupCooldown = 0.5; playerPickupCooldown = 0;
+    } else if (distGuest >= DRIBBLE_DIST * 1.8) {
+      ballOwner = 'none';
+    }
+  } else {
+    // ルーズ: Host が物理を回し、近接した方が拾う
+    ballLoosePhysics(dt);
+    if      (distHost  < DRIBBLE_DIST && !isKicking && playerPickupCooldown <= 0) ballOwner = 'player';
+    else if (distGuest < DRIBBLE_DIST && enemyPickupCooldown <= 0)                ballOwner = 'enemy';
+  }
+
+  // ボール配置
+  if (ballOwner === 'player') {
+    isDribbling = true; charDribble(playerChar, dt); mpRollBallWithPlayer(dt);
+  } else if (ballOwner === 'enemy') {
+    isDribbling = false; placeBallAtRemoteFeet();
+  } else {
+    isDribbling = false;
+  }
+
+  mpCheckGoal();
+}
+
+// Guest: 計算しない。Host の owner に従いボールを描画。自分の保持は足元予測＝即応。
+function updateMpGuest(dt) {
+  const owner = mpRemoteBallOwner; // 'host'|'guest'|'none'（Hostが配信した所有者）
+
+  if (mpGuestPredict) {
+    // 自分の発射をクライアント予測中。Host が発射を認識(owner!=='guest')したら同期。
+    ballOwner = 'none'; isDribbling = false;
+    ballLoosePhysics(dt);
+    if (owner !== 'guest') { mpGuestPredict = false; mpPendingKick = null; applyHostBall(dt); }
+    return;
+  }
+
+  if (owner === 'guest') {
+    // 自分が保持。発射(高速 ballVel)を検出したら Host へキック転送＆予測開始。
+    if (ballVel.lengthSq() > 4) {
+      queueGuestKick();
+      mpGuestPredict = true; ballOwner = 'none'; isDribbling = false;
+      return;
+    }
+    ballOwner = 'player'; isDribbling = true;
+    charDribble(playerChar, dt); mpRollBallWithPlayer(dt);
+  } else if (owner === 'host') {
+    ballOwner = 'enemy'; isDribbling = false; applyHostBall(dt);
+  } else {
+    ballOwner = 'none'; isDribbling = false; applyHostBall(dt);
+  }
+}
+
+// 受信した Host のボール状態へ寄せる（カクつき防止に軽く lerp）。
+function applyHostBall(dt) {
+  const bs = ballBuf.length ? ballBuf[ballBuf.length - 1] : null;
+  if (!bs) return;
+  ballMesh.position.x += (bs.x - ballMesh.position.x) * Math.min(1, 25 * dt);
+  ballMesh.position.y += (bs.y - ballMesh.position.y) * Math.min(1, 25 * dt);
+  ballMesh.position.z += (bs.z - ballMesh.position.z) * Math.min(1, 25 * dt);
+  ballVel.set(bs.vx ?? 0, bs.vy ?? 0, bs.vz ?? 0);
+}
+
+// ボールを相手(remotePeer)の足元へ（Host がゲスト保持を描画するとき）。
+function placeBallAtRemoteFeet() {
+  const f = new THREE.Vector3(-Math.sin(remotePeer.rotation.y), 0, -Math.cos(remotePeer.rotation.y));
+  ballMesh.position.set(
+    remotePeer.position.x + f.x * DRIBBLE_OFFSET, BALL_R,
+    remotePeer.position.z + f.z * DRIBBLE_OFFSET);
+  ballVel.set(0, 0, 0);
+}
+
+// 自分のドリブル中、進行方向にボールを転がす回転（見た目）。
+function mpRollBallWithPlayer(dt) {
+  const moving = keys.has('ArrowUp') || keys.has('KeyW') || keys.has('ArrowDown') || keys.has('KeyS')
+              || keys.has('ArrowLeft') || keys.has('KeyA') || keys.has('ArrowRight') || keys.has('KeyD')
+              || joystick.active;
+  if (!moving) return;
+  const facing = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+  ballMesh.rotateOnWorldAxis(new THREE.Vector3(facing.z, 0, -facing.x), RUN_SPEED * dt / BALL_R);
+}
+
+// Guest: 自分の発射(キック/パス/スキルシュート)を Host へ転送するキューに積む。
+function queueGuestKick() {
+  mpKickSeq++;
+  mpPendingKick = {
+    seq: mpKickSeq,
+    x: ballMesh.position.x, y: ballMesh.position.y, z: ballMesh.position.z,
+    vx: ballVel.x, vy: ballVel.y, vz: ballVel.z, cr: ballCurveRate,
+  };
+}
+
+// Host: ゲストから受け取ったキックを適用してボールをルーズ発射する。
+function applyGuestKick(k) {
+  if (!k || k.seq <= mpLastKickSeq) return;
+  mpLastKickSeq = k.seq;
+  ballMesh.position.set(k.x, k.y, k.z);
+  ballVel.set(k.vx, k.vy, k.vz);
+  ballCurveRate = k.cr || 0;
+  ballOwner = 'none'; isDribbling = false;
+  enemyPickupCooldown = 0.4; // ゲストが自分の発射を即回収しないように
 }
 
 // Host専用: 同期済みボール位置からゴールを判定（+X=Host得点 / -X=Guest得点）
@@ -2043,18 +2048,18 @@ function mpResetAfterGoal() {
   ballVel.set(0, 0, 0);
   ballOwner = 'none';
   mpRemoteBallOwner = 'none';
-  remoteTackling = false;
-  ballGrace = 0; claimedViaTackle = false;
+  remoteTackling = false; remoteSkillBusy = false;
+  mpGuestPredict = false; mpPendingKick = null;
   peerBuf.length = 0;
   ballBuf.length = 0;
 
-  // 失点したプレイヤーがボールを持ってリスタート
-  // mpGoalScorer = 得点したロール → 私が失点 = mpGoalScorer !== mpRole
-  if (mpGoalScorer !== mpRole) {
-    ballOwner = 'player'; // 私がボールを保持
+  // 失点側がボールを持ってリスタート。所有権の真実は Host が決める。
+  //  Host視点 ballOwner: 'player'=Host保持 / 'enemy'=Guest保持。
+  //  mpGoalScorer = 得点したロール。失点側 = mpGoalScorer の逆。
+  if (mpRole === 'host') {
+    ballOwner = (mpGoalScorer === 'host') ? 'enemy' : 'player'; // Hostが得点=Guest失点=Guest保持
   }
-  // ボール権威: 保持側(失点側)。得点側は非権威で受信描画。
-  iAmBallAuthority = (ballOwner === 'player');
+  // Guest は ballOwner を Host の配信(owner)に従わせる（ここでは none のまま）。
 
   isDribbling = isKicking = isPassing = isTackling = isSpinning = false;
   spinTimer = tackleTimer = kickTimer = 0;
@@ -2474,16 +2479,17 @@ let remotePeerMixer   = null;
 let remotePeerClipAct = {};
 let mpTimer              = 0;
 let gameWatcher          = null;
-let mpRemoteBallOwner    = 'none'; // 'host' | 'guest' | 'none'（ball.owner = グローバル所有者）
+let mpRemoteBallOwner    = 'none'; // Hostが配信した所有者 'host' | 'guest' | 'none'
 let mpGoalScorer         = null;   // 直前のゴールを決めたロール ('host'|'guest')
 let lastGoalSeq          = 0;     // ゴールイベント重複処理防止
-// ── リアル対戦のボール権威モデル ───────────────────────────────────
-// iAmBallAuthority: 「最後に触れた側」がボールをシミュ＆送信する権威を持つ。
-//   保持中も、保持から手放した(キック/ルーズ)後も、相手が触れるまで自分が権威。
-let iAmBallAuthority     = false;
-let remoteTackling       = false;  // 相手のタックル中フラグ（被タックル解放判定用）
-let ballGrace            = 0;      // 直近取得/奪取の猶予(s)。競合で即手放さない
-let claimedViaTackle     = false;  // 直近取得がタックル奪取か（ルーズ競合と区別）
+// ── リアル対戦: ホスト権威モデル ───────────────────────────────────
+// 計算は全て Host。Guest は入力(位置/タックル/スキル/キック)送信＋描画のみ。
+let remoteTackling       = false;  // 相手のタックル中フラグ（Hostが奪取判定に使用）
+let remoteSkillBusy      = false;  // 相手がスキルモーション中か（奪取不可判定）
+let mpKickSeq            = 0;      // Guest: 自分の発射の連番（Hostへ転送）
+let mpLastKickSeq        = 0;      // Host: 処理済みのゲストキック連番
+let mpPendingKick        = null;   // Guest: 送信中のキックペイロード
+let mpGuestPredict       = false;  // Guest: 自分の発射をクライアント予測中か
 
 // エンティティ補間バッファ（受信スナップショットをタイムスタンプ付きで保持）
 const INTERP_DELAY    = 120;   // ms: この分だけ過去を描画してスムーズに補間
@@ -2564,10 +2570,17 @@ function onCoreLoaded() {
       // ゲーム状態を Firebase で監視開始
       gameWatcher = mpHandlers.watchGame(data => {
         const remote = mpRole === 'host' ? data?.guest : data?.host;
-        if (remote) { pushPeerBuf(remote); remoteTackling = !!remote.tackling; }
+        if (remote) {
+          pushPeerBuf(remote);
+          remoteTackling  = !!remote.tackling;
+          remoteSkillBusy = !!remote.skillBusy;
+          // Host: ゲストの発射(キック)を受け取りボールをルーズ発射
+          if (mpRole === 'host' && remote.kick) applyGuestKick(remote.kick);
+        }
         if (data?.ball) {
           pushBallBuf(data.ball);
-          mpRemoteBallOwner = data.ball.owner ?? 'none';
+          // owner は Host が配信する唯一の真実。Guest はこれに従う。
+          if (mpRole === 'guest') mpRemoteBallOwner = data.ball.owner ?? 'none';
         }
         if (data?.score && mpRole === 'guest') {
           playerScore = data.score.guest ?? 0;
@@ -2671,7 +2684,8 @@ export function startGame(config) {
   gameStarted = false;
   isMultiplayer = false; mpRole = null; mpHandlers = null;
   mpTimer = 0; mpRemoteBallOwner = 'none'; mpGoalScorer = null; lastGoalSeq = 0;
-  iAmBallAuthority = false; remoteTackling = false; ballGrace = 0; claimedViaTackle = false;
+  remoteTackling = false; remoteSkillBusy = false;
+  mpKickSeq = 0; mpLastKickSeq = 0; mpPendingKick = null; mpGuestPredict = false;
   peerBuf.length = 0; ballBuf.length = 0;
   ballOwner = 'none'; gkBallHolder = 'none'; isDribbling = false;
   gkSessionId++;
@@ -2726,8 +2740,7 @@ export function startGame(config) {
     mpRole        = config.mp.role;
     mpHandlers    = config.mp;
     hasEnemy      = false;
-    // キックオフ時は誰も保持していない → Host を既定の権威にして中央ボールを管理
-    iAmBallAuthority = (config.mp.role === 'host');
+    // キックオフ: 中央ルーズボール。Host が物理を回し先に触れた方が拾う。
     CORE_TOTAL++;  // リモートキャラ読み込み分
     // リモートプレイヤーのキャラ読み込み
     loader.load(
@@ -4182,18 +4195,17 @@ function animate() {
       mpHandlers.publishPlayer(mpRole, {
         x: player.position.x, z: player.position.z,
         ry: player.rotation.y, anim: getDesiredAnim() || 'idle',
-        tackling: isTackling, // 被タックル解放判定に使用
+        tackling:  isTackling,         // Host: 奪取判定に使用
+        skillBusy: playerSkillBusy(),  // Host: スキル中は奪わない
+        kick:      mpRole === 'guest' ? mpPendingKick : null, // Guest: 発射転送
       });
-      // ボール送信は権威者のみ（単一ライター原則）。保持中=owner自分 / ルーズ=owner'none'。
-      // これにより「保持者の足元」と「相手の物理結果」が二重書き込みで競合しない。
-      if (iAmBallAuthority) {
+      // ボールは Host が唯一配信（全計算がHost側＝二重計算の競合を根絶）。
+      if (mpRole === 'host') {
         mpHandlers.publishBall({
           x: ballMesh.position.x, y: ballMesh.position.y, z: ballMesh.position.z,
           vx: ballVel.x, vy: ballVel.y, vz: ballVel.z,
-          owner: ballOwner === 'player' ? mpRole : 'none',
+          owner: ballOwner === 'player' ? 'host' : (ballOwner === 'enemy' ? 'guest' : 'none'),
         });
-      }
-      if (mpRole === 'host') {
         mpHandlers.publishScore({ host: playerScore, guest: cpuScore });
       }
     }
