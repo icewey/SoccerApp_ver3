@@ -4001,27 +4001,38 @@ function launchSetPieceBall(from, target, kind, atkGoalX) {
 }
 
 // CPUの蹴り手が3秒後に自動実行。
-//  スローイン: 必ずパス（味方へ。味方がいなければ前方スペースへ投げる。ドリブル禁止）。
-//  コーナー: 味方がいればパス、いなければドリブル開始。
+//  スローイン/コーナーとも CPU は必ずパス/センタリング（ドリブル禁止）。
+//  味方がいれば味方の位置へ。いなければ前方スペース(スロー)/箱中央(コーナー)へ。
+//  重要: 蹴り手自身がクールダウンを持たないと投げた瞬間に拾い直して
+//  「ドリブルしてくる」ため、蹴り手の pickup を必ず抑える。
 function cpuSetPieceAct() {
   const takerKey = setPiece.takerKey, kind = setPiece.kind;
   const taker = entity2(takerKey);
-  const from  = taker.group.position;
+  const from  = taker.group.position.clone();
   const mate  = mode2v2 ? teammate2(takerKey) : null;
   setPiece = null;
-  const sgn = Math.sign(ballTeamOf(takerKey) === 'A' ? GOAL_X : -GOAL_X); // 攻撃方向
-  let target = (mate && mate.group) ? mate.group.position : null;
-  // スローインは必ずパス: 味方がいなければ前方スペースへ投げる
-  if (!target && kind === 'throwin') target = new THREE.Vector3(from.x + sgn * 10, 0, from.z * 0.4);
-  if (target) {
-    launchSetPieceBall(from, target, kind, sgn * GOAL_X);
-    playerPickupCooldown = 0.4; // 受け手(敵)が拾いやすいよう一瞬プレイヤーを抑える
+  const atkGoalX = ballTeamOf(takerKey) === 'A' ? GOAL_X : -GOAL_X; // 攻撃ゴール
+  const sgn = Math.sign(atkGoalX);
+
+  // ターゲット決定（必ずパス先を作る＝ドリブル分岐を廃止）
+  let target;
+  if (mate && mate.group) {
+    target = mate.group.position.clone();                                  // 味方へ
+  } else if (kind === 'corner') {
+    target = new THREE.Vector3(sgn * (GOAL_X - 9), 0, (Math.random() - 0.5) * 6); // 箱中央へセンタリング
   } else {
-    // コーナーで味方なし → ドリブル開始
-    ballOwner = takerKey; isDribbling = false;
-    if (!mode2v2) enemyState = 'dribble';
-    playerPickupCooldown = 0.6;
+    // スロー: 前方スペースへ（再ライン割れ防止にフィールド内へクランプ）
+    target = new THREE.Vector3(
+      Math.max(-(FIELD_HALF_W - 4), Math.min(FIELD_HALF_W - 4, from.x + sgn * 11)),
+      0, from.z * 0.35);
   }
+
+  launchSetPieceBall(from, target, kind, atkGoalX);
+
+  // 蹴り手が自分の投球/クロスを即回収しないようクールダウン（ドリブル化を防ぐ）。
+  enemyPickupCooldown = 1.0;                       // 1v1の敵(updateEnemy)用
+  if (taker && taker.pickupCd !== undefined) taker.pickupCd = 1.0; // 2v2の蹴り手CPU用
+  playerPickupCooldown = 0.3;                      // プレイヤーが密着時のみ軽く抑える
   lastTouchTeam = ballTeamOf(takerKey) || lastTouchTeam;
 }
 
