@@ -276,6 +276,7 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
   ballSpin.set(0, 0, 0);
   isDribbling = false;
   ballOwner   = 'none';
+  kickBallFollow = false; // 接触＝発射。追従終了。
 }
 
 // ── プレイヤーのワンショット動作（キーボード・モバイル共通）────────────────
@@ -313,6 +314,7 @@ function startKick(lofted, curve, power) {
   // 移動中なら滑りながら蹴る。減速はキックモーション全体に広げて自然に止める。
   kickGlide = playerHasMoveInput() ? 1 : 0;
   kickGlideTime = kickTimer;
+  kickBallFollow = true; // 接触フレームまでボールを足元に追従（置き去り防止）
   fadeToClip('kick', false);
   const act = mixer.clipAction(clips['kick']);
   act.setEffectiveTimeScale(KICK_SPEED); // 速く再生
@@ -1286,7 +1288,7 @@ function updateMpHost(dt) {
     // Host保持: ゲストのタックルで奪われる / 手放し・シュートでルーズへ
     if (remoteTackling && distGuest < TACKLE_DIST && !playerSkillBusy()) {
       ballOwner = 'enemy'; playerPickupCooldown = 0.5; enemyPickupCooldown = 0;
-    } else if (distHost >= DRIBBLE_DIST * 1.6 || (isKicking && !isPassing)) {
+    } else if (distHost >= DRIBBLE_DIST * 1.6 || (isKicking && !isPassing && !kickBallFollow)) {
       ballOwner = 'none';
     }
   } else if (ballOwner === 'enemy') {
@@ -1429,7 +1431,7 @@ function updateBall(dt) {
 
   if (!isMultiplayer) {
     // ソロ専用: プレイヤー拾得・タックルはここで処理
-    if (ballOwner === 'player' && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
+    if (ballOwner === 'player' && (distPlayer >= DRIBBLE_DIST * 1.5 || (isKicking && !isPassing && !kickBallFollow))) ballOwner = 'none';
     if (ballOwner === 'none') {
       // プレイヤー拾得: CPUのキックアニメ中(enemyKicking)でもルーズボールを拾える
       // ようにする（以前は !enemyKicking で約1秒間拾えず「取れない」原因だった）
@@ -3055,6 +3057,9 @@ const TURN_SPEED   = 1.2;
 const KICK_GLIDE_MAX  = 0.9;  // 開始時の速度（RUN_SPEED比）。高めで初速の急落を防ぐ
 let kickGlide = 0;            // 0..1。シュート/パス開始時に1（移動入力時のみ）→減衰
 let kickGlideTime = 0.5;     // グライドが0へ減衰する秒数（=キック/パス硬直の長さ）
+// 通常シュートの振りかぶり中はボールを足元に保持（追従）し、接触フレームで蹴り出す。
+// これがないとグライドで前進した分ボールが置き去りになる。kickBall発射でfalse。
+let kickBallFollow = false;
 const TACKLE_LOCK  = 0.7;  // タックルの操作ロック時間（clip全長1.77sは長すぎるため短い前進ランジに）
 let FIELD_HALF_W = 51;
 let FIELD_HALF_D = 33;
@@ -3775,7 +3780,7 @@ function update2v2Possession(dt) {
   // 手放し: プレイヤー
   if (ballOwner === 'player') {
     const dp = distXZ(ballMesh.position, player.position);
-    if (!skillHold && (dp >= DR * 1.5 || (isKicking && !isPassing))) ballOwner = 'none';
+    if (!skillHold && (dp >= DR * 1.5 || (isKicking && !isPassing && !kickBallFollow))) ballOwner = 'none';
   }
   // 手放し: CPU
   for (const c of cpu2List) {
