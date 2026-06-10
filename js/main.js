@@ -3565,9 +3565,34 @@ function isClosestDefender2(c) {
 
 // ── パス実行（出し手→味方へのダイレクトパス。軌道上に敵がいればカット）──────
 const PASS_DIRECT_SPEED = 30; // 物理無視で対象へ直進する速度(m/s)
+// プレイヤーの向き(rotation.y)に応じてパス先を選ぶ。
+// 少しでも右(+Z側)を向いていれば右側で最も近い味方、左(-Z側)なら左側で最も近い味方。
+// その側に味方がいなければ全味方から最も近い味方へ。（チームAは+X攻撃、右=+Z）
+function passReceiverForPlayer() {
+  const mates = teammatesOf2('player').filter(m => m.stun <= 0);
+  if (mates.length === 0) return null;
+  const facingZ = -Math.cos(player.rotation.y); // >0=右(+Z) / <0=左(-Z)
+  const side = facingZ > 0.05 ? 1 : facingZ < -0.05 ? -1 : 0;
+  const nearestIn = pool => {
+    let best = null, bd = Infinity;
+    for (const m of pool) { const d = distXZ(m.group.position, player.position); if (d < bd) { bd = d; best = m; } }
+    return best;
+  };
+  if (side !== 0) {
+    const onSide = mates.filter(m => {
+      const lat = m.group.position.z - player.position.z; // +Z=右
+      return side > 0 ? lat > 0.3 : lat < -0.3;
+    });
+    if (onSide.length > 0) return nearestIn(onSide);
+  }
+  return nearestIn(mates);
+}
+
 function doPass(passerKey, forcedRecvKey) {
   const passer = entity2(passerKey);
-  const recv = forcedRecvKey ? entity2(forcedRecvKey) : teammate2(passerKey);
+  const recv = forcedRecvKey ? entity2(forcedRecvKey)
+             : passerKey === 'player' ? passReceiverForPlayer()
+             : teammate2(passerKey);
   if (!passer || !recv) return;
   const from = passer.group.position, to = recv.group.position;
   const dx = to.x - from.x, dz = to.z - from.z;
@@ -3923,16 +3948,21 @@ function nearestEnemyEntity(spot) {
 }
 function clearBallMotion() { ballVel.set(0, 0, 0); ballCurveRate = 0; ballOwner = 'none'; isDribbling = false; }
 
+// (fromX,fromZ) から (toX,toZ) を向く rotation.y を返す（facing=(-sin,0,-cos)）。
+function faceRyToward(fromX, fromZ, toX, toZ) {
+  return Math.atan2(-(toX - fromX), -(toZ - fromZ));
+}
+
 // ── 発生: タッチライン → スローイン ────────────────────────────────────────
 function triggerThrowIn() {
   const zSign = Math.sign(ballMesh.position.z) || 1;
   const xPos  = Math.max(-(FIELD_HALF_W - 1), Math.min(FIELD_HALF_W - 1, ballMesh.position.x));
   const awarded = lastTouchTeam === 'A' ? 'B' : 'A'; // 最後に触れた逆チームがスロー
   clearBallMotion();
-  // 蹴り手はタッチラインの外に立たせ、自チームの攻撃方向(=味方がいる方)を向く
+  // 蹴り手はタッチラインの外に立ち、フィールド内側(攻撃方向＋中央)を向く＝カメラも内向き
   const taker = { x: xPos, z: zSign * (FIELD_HALF_D + 1.0) };
-  // A=+X攻撃 → +X向き(ry=-PI/2) / B=-X攻撃 → -X向き(ry=+PI/2)
-  const faceRy = awarded === 'A' ? -Math.PI / 2 : Math.PI / 2;
+  const sgn   = awarded === 'A' ? 1 : -1; // 攻撃方向(+X/-X)
+  const faceRy = faceRyToward(taker.x, taker.z, xPos + sgn * 6, 0);
   if (awarded === 'A') startPlayerSetPiece('throwin', taker, faceRy);
   else                 startOpponentSetPiece('throwin', taker, faceRy);
 }
@@ -3945,9 +3975,10 @@ function triggerGoalLineOut() {
   const attacking = defending === 'A' ? 'B' : 'A';
   clearBallMotion();
   if (lastTouchTeam === defending) {
-    // 守備側が最後に触れた → 攻撃側のコーナーキック。蹴り手はコーナー外、ゴール方向を向く。
+    // 守備側が最後に触れた → 攻撃側のコーナーキック。蹴り手はコーナー外、
+    // ゴール前の箱(フィールド内側)を向く＝カメラも内向き。
     const taker = { x: xSign * (FIELD_HALF_W - 0.3), z: zSign * (FIELD_HALF_D + 0.8) };
-    const faceRy = xSign > 0 ? -Math.PI / 2 : Math.PI / 2;
+    const faceRy = faceRyToward(taker.x, taker.z, xSign * (GOAL_X - 10), 0);
     if (attacking === 'A') startPlayerSetPiece('corner', taker, faceRy);
     else                   startOpponentSetPiece('corner', taker, faceRy);
   } else {
@@ -4156,14 +4187,15 @@ function updateSetPieceHold() {
 function setPiecePass() {
   if (!setPiece || !setPiece.ready || setPiece.takerKey !== 'player') return;
   const kind = setPiece.kind;
-  const mate = nearestTeammateForPlayer();
   setPiece = null;
   hideSetPieceUI();
-  const from = player.position;
-  // プレイヤーチーム(A)は+X攻撃。味方がいればそこへ、いなければ攻撃方向の前方スペースへ。
-  const target = mate
-    ? mate.group.position.clone()
-    : new THREE.Vector3(from.x + 10, 0, from.z * 0.4);
+  const from = player.position.clone();
+  // 味方がいれば(向きに応じた)味方へ。いなければコーナー=箱中央へクロス/スロー=前方へ。
+  const mate = mode2v2 ? passReceiverForPlayer() : null;
+  let target;
+  if (mate && mate.group) target = mate.group.position.clone();
+  else if (kind === 'corner') target = new THREE.Vector3(GOAL_X - 9, 0, (Math.random() - 0.5) * 6);
+  else target = new THREE.Vector3(Math.min(FIELD_HALF_W - 4, from.x + 11), 0, from.z * 0.35);
   launchSetPieceBall(from, target, kind, GOAL_X);
   enemyPickupCooldown = 0.4; // 受け手が拾いやすいよう一瞬敵を抑える
   lastTouchTeam = 'A';
