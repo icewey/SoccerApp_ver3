@@ -296,11 +296,19 @@ function startSpin() {
 // （実測 kick.fbx で約0.5）に同期させる。これで「飛び出しが早い/遅い」のズレを解消。
 const KICK_SPEED   = 1.4; // キックアニメの再生倍率（大きいほどキビキビ＝ラグ減）
 const KICK_CONTACT = 0.5; // クリップ内の足接触フレーム（0..1）
+// 移動入力があるか（キー or ジョイスティック）。グライド開始判定に使用。
+function playerHasMoveInput() {
+  return keys.has('KeyW') || keys.has('ArrowUp') || keys.has('KeyS') || keys.has('ArrowDown')
+      || keys.has('KeyA') || keys.has('ArrowLeft') || keys.has('KeyD') || keys.has('ArrowRight')
+      || joystick.active;
+}
+
 function startKick(lofted, curve, power) {
   if (!gameStarted || !clips['kick'] || !mixer) return;
   if (playerStunTimer > 0) return; // スタン中は操作不可
   endSpin();              // スピン中のシュートはスピンを打ち切ってから蹴る（状態固着防止）
   isKicking = true;
+  kickGlide = playerHasMoveInput() ? 1 : 0; // 移動中なら滑りながら蹴る
   const dur = clips['kick'].duration;
   kickTimer = dur / KICK_SPEED + 0.1; // 再生が速くなる分ロックも短く（保険）
   fadeToClip('kick', false);
@@ -385,6 +393,7 @@ function startPass() {
   if (playerStunTimer > 0 || !clips['pass'] || !mixer) return;
   endSpin();
   isPassing = true;
+  kickGlide = playerHasMoveInput() ? 1 : 0; // 移動中なら滑りながらパス
   const dur = clips['pass'].duration;
   passTimer = dur + 0.15; // 保険: finished取りこぼし時もこの時間で必ず解除
   fadeToClip('pass', false);
@@ -452,6 +461,7 @@ function useSkill() {
   if (isReo()) { useReoSkill(0); return; }
   const limited = !isPK;
   if (limited && skillCharges <= 0) { flashNoCharge(); return; }
+  kickGlide = 0; // スキルは独自に移動制御するためグライド無効
 
   const before = skillActiveSig();
   fireSkillByName(playerSkill);
@@ -483,6 +493,7 @@ function useReoSkill(idx) {
   if (!entry) return;
   const limited = !isPK;
   if (limited && skillCharges <= 0) { flashNoCharge(); return; }
+  kickGlide = 0; // スキルは独自に移動制御するためグライド無効
 
   const before = skillActiveSig();
   fireSkillByName(entry.skill);
@@ -3036,6 +3047,10 @@ export function startGame(config) {
 const MOVE_SPEED   = 8;
 const RUN_SPEED    = 11;   // 通常移動速度（少し遅く）
 const TURN_SPEED   = 1.2;
+// シュート/パスのモーション中の「滑り(グライド)」: 急停止せず減速しながら進む
+const KICK_GLIDE_MAX  = 0.55; // 開始時の速度（RUN_SPEED比）
+const KICK_GLIDE_TIME = 0.4;  // この秒数でグライドが0へ減衰
+let kickGlide = 0;            // 0..1。シュート/パス開始時に1（移動入力時のみ）→減衰
 const TACKLE_LOCK  = 0.7;  // タックルの操作ロック時間（clip全長1.77sは長すぎるため短い前進ランジに）
 let FIELD_HALF_W = 51;
 let FIELD_HALF_D = 33;
@@ -4431,6 +4446,29 @@ function animate() {
         while (camDiff < -Math.PI) camDiff += 2 * Math.PI;
         viewAngle += camDiff * Math.min(1, 1.5 * dt); // ゆっくり追従（約1〜2秒で追いつく）
       }
+    }
+
+    // シュート/パスのモーション中: 急停止せず、方向キー方向(無入力なら向き)へ
+    // 減速しながら滑る。通常速度ではなく徐々に止まる自然な慣性。
+    if (!playerFrozenBySetPiece() && playerStunTimer <= 0 && !isTackling && !isSpinning
+        && (isKicking || isPassing) && kickGlide > 0) {
+      kickGlide = Math.max(0, kickGlide - dt / KICK_GLIDE_TIME);
+      const camDir   = new THREE.Vector3(-Math.sin(viewAngle), 0, -Math.cos(viewAngle));
+      const camRight = new THREE.Vector3( Math.cos(viewAngle), 0, -Math.sin(viewAngle));
+      const mv = new THREE.Vector3();
+      if (keys.has('KeyW') || keys.has('ArrowUp'))    mv.add(camDir);
+      if (keys.has('KeyS') || keys.has('ArrowDown'))  mv.addScaledVector(camDir, -1);
+      if (keys.has('KeyA') || keys.has('ArrowLeft'))  mv.addScaledVector(camRight, -1);
+      if (keys.has('KeyD') || keys.has('ArrowRight')) mv.addScaledVector(camRight, 1);
+      if (joystick.active) {
+        if (Math.abs(joystick.dy) > 0.05) mv.addScaledVector(camDir,   -joystick.dy);
+        if (Math.abs(joystick.dx) > 0.05) mv.addScaledVector(camRight,  joystick.dx);
+      }
+      // 無入力なら向いている方向へ慣性で滑る（完全停止しない）
+      if (mv.lengthSq() <= 0.001) mv.set(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+      mv.normalize();
+      player.position.addScaledVector(mv, RUN_SPEED * KICK_GLIDE_MAX * kickGlide * dt);
+      charClampToField(playerChar);
     }
 
     // ワンショット動作の終了をタイマーで保証する。finishedイベントは別アニメへの
