@@ -177,13 +177,20 @@ const ENEMY_TACKLE_COOLDOWN  = 2.5;
 // ── 2vs2 用のCPUエンティティ（味方1人＋敵2人）────────────────────────────────
 // チームA = プレイヤー＋味方(ally) / チームB = 敵2人(enemy, enemy2)。
 // 敵#1は既存の enemy グループを流用し、味方と敵#2を新規に用意する。
-let mode2v2 = false;          // 2vs2モードか（trueの間は専用AI/所有権を使う）
-const ally   = new THREE.Group();
-const enemy2 = new THREE.Group();
+let mode2v2 = false;          // チーム戦モード(2vs2 or 3vs3)か（専用AI/所有権を使う）
+let teamSize = 2;             // 1チームの人数（2 or 3）。3vs3で ally2/enemy3 を追加。
+const ally    = new THREE.Group();
+const ally2   = new THREE.Group();
+const enemy2  = new THREE.Group();
+const enemy3  = new THREE.Group();
 let allyMixer   = null, allyCurrent   = null;
+let ally2Mixer  = null, ally2Current  = null;
 let enemy2Mixer = null, enemy2Current = null;
+let enemy3Mixer = null, enemy3Current = null;
 const allyChar   = { group: ally,   animState: null };
+const ally2Char  = { group: ally2,  animState: null };
 const enemy2Char = { group: enemy2, animState: null };
+const enemy3Char = { group: enemy3, animState: null };
 
 // ── ボール所有権 ───────────────────────────────────────────────────────────
 // 2vs2では 'ally' / 'enemy2' も取りうる。ソロ/PK/MPでは 'player' | 'enemy' | 'none'。
@@ -365,7 +372,8 @@ function startTackle() {
 // パスボタンの振り分け（2vs2）。自分が保持中＝出す / 味方が保持中＝要求する。
 function pressPass() {
   if (!mode2v2) return;
-  if (ballOwner === 'ally') requestPass();
+  // 味方CPUが保持中＝要求 / 自分が保持中＝出す
+  if (ballOwner !== 'player' && ballTeamOf(ballOwner) === 'A') requestPass();
   else startPass();
 }
 
@@ -1089,9 +1097,7 @@ function collidersThisFrame() {
   const list = [];
   list.push({ g: player, solid: !playerInSkill(), movable: true });
   if (mode2v2) {
-    list.push({ g: ally,   solid: !cpu2InSkill(c2Ally),   movable: true });
-    list.push({ g: enemy,  solid: !cpu2InSkill(c2Enemy),  movable: true });
-    list.push({ g: enemy2, solid: !cpu2InSkill(c2Enemy2), movable: true });
+    for (const c of cpu2List) list.push({ g: c.group, solid: !cpu2InSkill(c), movable: true });
   } else if (hasEnemy) {
     list.push({ g: enemy, solid: !enemyInSkill(), movable: true });
   }
@@ -1713,12 +1719,22 @@ const allyAnim = {
   get mixer()   { return allyMixer; },    set mixer(v)   { allyMixer = v; },
   get current() { return allyCurrent; },  set current(v) { allyCurrent = v; },
 };
+const ally2Anim = {
+  get mixer()   { return ally2Mixer; },   set mixer(v)   { ally2Mixer = v; },
+  get current() { return ally2Current; }, set current(v) { ally2Current = v; },
+};
 const enemy2Anim = {
   get mixer()   { return enemy2Mixer; },   set mixer(v)   { enemy2Mixer = v; },
   get current() { return enemy2Current; }, set current(v) { enemy2Current = v; },
 };
+const enemy3Anim = {
+  get mixer()   { return enemy3Mixer; },   set mixer(v)   { enemy3Mixer = v; },
+  get current() { return enemy3Current; }, set current(v) { enemy3Current = v; },
+};
 allyChar.animState   = allyAnim;
+ally2Char.animState  = ally2Anim;
 enemy2Char.animState = enemy2Anim;
+enemy3Char.animState = enemy3Anim;
 const playerGKAnim = {
   get mixer()   { return playerGKMixer; },   set mixer(v)   { playerGKMixer = v; },
   get current() { return playerGKCurrent; }, set current(v) { playerGKCurrent = v; },
@@ -2221,13 +2237,10 @@ function resetAfterGoal(scorer) {
     for (const c of cpu2List) {
       c.stun = 0; c.tackling = false; c.kicking = false; c.passing = false;
       c.tackleCd = 0; c.pickupCd = 0; c.passCd = 0; c.oneShotTimer = 0;
+      const mx = c.char.animState.mixer; if (mx) { mx.stopAllAction(); c.char.animState.current = null; }
+      c.group.position.set(c.homeX ?? 0, groundY, c.homeZ ?? 0);
+      c.group.rotation.y = c.homeRy ?? Math.PI / 2;
     }
-    if (allyMixer)   { allyMixer.stopAllAction();   allyCurrent   = null; }
-    if (enemyMixer)  { enemyMixer.stopAllAction();  enemyCurrent  = null; }
-    if (enemy2Mixer) { enemy2Mixer.stopAllAction(); enemy2Current = null; }
-    ally.position.set(-8, groundY, -7);  ally.rotation.y   = -Math.PI / 2;
-    enemy.position.set(8, groundY, 7);   enemy.rotation.y  =  Math.PI / 2;
-    enemy2.position.set(8, groundY, -7); enemy2.rotation.y =  Math.PI / 2;
     if (scorer === 'cpu') {
       // プレイヤー失点 → プレイヤーチームがキックオフ（プレイヤー保持）
       player.position.set(0, groundY, 0); player.rotation.y = -Math.PI / 2;
@@ -2235,11 +2248,12 @@ function resetAfterGoal(scorer) {
     } else {
       // CPU失点 → 敵チームがキックオフ（敵#1保持）
       player.position.set(-8, groundY, 5); player.rotation.y = -Math.PI / 2;
-      enemy.position.set(0, groundY, 0);   enemy.rotation.y  =  Math.PI / 2;
-      ballOwner = 'enemy'; isDribbling = false;
+      const carrier = cpu2List.find(c => c.team === 'B');
+      if (carrier) { carrier.group.position.set(0, groundY, 0); ballOwner = carrier.key; }
+      isDribbling = false;
     }
     ballMesh.position.set(0, BALL_R, 0);
-    charAnim(allyChar, 'idle'); charAnim(enemyChar, 'idle'); charAnim(enemy2Char, 'idle');
+    for (const c of cpu2List) charAnim(c.char, 'idle');
     fadeToClip('idle');
     if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
     return;
@@ -2547,7 +2561,7 @@ function onCoreLoaded() {
   if (coreReady === CORE_TOTAL) {
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
     if (mode2v2) {
-      for (const g of [ally, enemy, enemy2]) { g.position.y = groundY; g.visible = true; }
+      for (const c of cpu2List) { c.group.position.y = groundY; c.group.visible = true; }
     }
     // PKモードでは自陣GK（プレイヤー側）は不要なので非表示
     if (playerGKMixer && !isPK) {
@@ -2611,7 +2625,7 @@ function onCoreLoaded() {
     gameStarted = true;
     fadeToClip('idle');
     if (hasEnemy) fadeToEnemyClip('idle');
-    if (mode2v2) { charAnim(allyChar, 'idle'); charAnim(enemyChar, 'idle'); charAnim(enemy2Char, 'idle'); }
+    if (mode2v2) { for (const c of cpu2List) charAnim(c.char, 'idle'); }
     if (isMultiplayer) fadeToRemoteClip('idle');
 
     if (isPK) {
@@ -2655,17 +2669,20 @@ export function startGame(config) {
   // enemy を scene から除去（CPU戦の残骸防止）
   scene.remove(enemy);
   while (enemy.children.length > 0) enemy.remove(enemy.children[0]);
-  // 2vs2 の味方・敵#2 を除去＋状態リセット
-  scene.remove(ally);   while (ally.children.length   > 0) ally.remove(ally.children[0]);
-  scene.remove(enemy2); while (enemy2.children.length > 0) enemy2.remove(enemy2.children[0]);
-  allyMixer = null; allyCurrent = null;
-  enemy2Mixer = null; enemy2Current = null;
-  // 共通関数が参照する group / animState を結線（2vs2では enemy も流用する）
-  allyChar.group = ally;     allyChar.animState   = allyAnim;
+  // チーム戦CPU(味方・敵 追加分)を除去＋状態リセット
+  for (const g of [ally, ally2, enemy2, enemy3]) { scene.remove(g); while (g.children.length > 0) g.remove(g.children[0]); }
+  allyMixer = allyCurrent = null;   ally2Mixer = ally2Current = null;
+  enemy2Mixer = enemy2Current = null; enemy3Mixer = enemy3Current = null;
+  // 共通関数が参照する group / animState を結線
+  allyChar.group  = ally;   allyChar.animState   = allyAnim;
+  ally2Char.group = ally2;  ally2Char.animState  = ally2Anim;
   enemy2Char.group = enemy2; enemy2Char.animState = enemy2Anim;
+  enemy3Char.group = enemy3; enemy3Char.animState = enemy3Anim;
   enemyChar.group = enemy;   enemyChar.animState  = enemyAnim;
   passState = null;
-  mode2v2 = !isPK && !config.mp && !!config.mode2v2;
+  mode2v2 = !isPK && !config.mp && (!!config.mode2v2 || !!config.mode3v3);
+  teamSize = config.mode3v3 ? 3 : 2;
+  rebuildCpu2List();
   for (const c of cpu2List) {
     c.stun = 0; c.tackling = false; c.kicking = false; c.passing = false;
     c.tackleCd = 0; c.pickupCd = 0; c.passCd = 0; c.oneShotTimer = 0;
@@ -2873,12 +2890,27 @@ export function startGame(config) {
     );
   }
 
-  // ── 2vs2: 味方CPU＋敵CPU2人をロード ──────────────────────────────────
+  // ── チーム戦(2vs2/3vs3): 味方CPU＋敵CPUをロード ──────────────────────
   if (mode2v2) {
-    CORE_TOTAL += 3;
-    c2Ally.zoneZ   = 0;                      // 味方は中央ゾーン（広めにカバー）
-    c2Enemy.zoneZ  =  FIELD_HALF_D * 0.35;   // 敵#1は上半分ゾーン
-    c2Enemy2.zoneZ = -FIELD_HALF_D * 0.35;   // 敵#2は下半分ゾーン
+    const HD = FIELD_HALF_D, AF = config.charFbx;
+    // ロスター: {e:entity, a:anim, fbx, tint, sx, sz, mk:marker, zoneZ}
+    const roster = teamSize >= 3 ? [
+      { e: c2Ally,   a: allyAnim,   fbx: config.allyFbx   || AF, tint: 0x4488ff, sx: -8, sz: -10, mk: 0x44aaff, zoneZ:  HD * 0.45 },
+      { e: c2Ally2,  a: ally2Anim,  fbx: config.ally2Fbx  || AF, tint: 0x4488ff, sx: -8, sz:  10, mk: 0x44aaff, zoneZ: -HD * 0.45 },
+      { e: c2Enemy,  a: enemyAnim,  fbx: config.enemy1Fbx || AF, tint: 0xff4444, sx:  8, sz:  10, mk: 0xff2222, zoneZ:  HD * 0.45 },
+      { e: c2Enemy2, a: enemy2Anim, fbx: config.enemy2Fbx || AF, tint: 0xff4444, sx:  8, sz:   0, mk: 0xff2222, zoneZ:  0 },
+      { e: c2Enemy3, a: enemy3Anim, fbx: config.enemy3Fbx || AF, tint: 0xff4444, sx:  8, sz: -10, mk: 0xff2222, zoneZ: -HD * 0.45 },
+    ] : [
+      { e: c2Ally,   a: allyAnim,   fbx: config.allyFbx   || AF, tint: 0x4488ff, sx: -8, sz: -7, mk: 0x44aaff, zoneZ: 0 },
+      { e: c2Enemy,  a: enemyAnim,  fbx: config.enemy1Fbx || AF, tint: 0xff4444, sx:  8, sz:  7, mk: 0xff2222, zoneZ:  HD * 0.35 },
+      { e: c2Enemy2, a: enemy2Anim, fbx: config.enemy2Fbx || AF, tint: 0xff4444, sx:  8, sz: -7, mk: 0xff2222, zoneZ: -HD * 0.35 },
+    ];
+    CORE_TOTAL += roster.length;
+    for (const r of roster) {
+      r.e.zoneZ = r.zoneZ;
+      r.e.homeX = r.sx; r.e.homeZ = r.sz;
+      r.e.homeRy = r.e.team === 'A' ? -Math.PI / 2 : Math.PI / 2;
+    }
     const loadCpu2 = (group, animProxy, path, tint, sx, sz, markerColor) => {
       loader.load(path, fbx => {
         fbx.scale.setScalar(0.01);
@@ -2906,9 +2938,7 @@ export function startGame(config) {
       }, undefined, err => { console.error('2vs2 load failed:', path, err); onCoreLoaded(); });
     };
     // 味方=青く着色＋水色マーカー / 敵=赤く着色＋赤マーカー（味方・敵を見分けやすく）
-    loadCpu2(ally,   allyAnim,   config.allyFbx   || config.charFbx, 0x4488ff, -8, -7, 0x44aaff);
-    loadCpu2(enemy,  enemyAnim,  config.enemy1Fbx || config.charFbx, 0xff4444,  8,  7, 0xff2222);
-    loadCpu2(enemy2, enemy2Anim, config.enemy2Fbx || config.charFbx, 0xff4444,  8, -7, 0xff2222);
+    for (const r of roster) loadCpu2(r.e.group, r.a, r.fbx, r.tint, r.sx, r.sz, r.mk);
   }
 
   // ゴールキーパーロード（ソロモードのみ、両チーム固定キャラ）
@@ -3445,9 +3475,17 @@ function makeCpu2(group, char, key, team) {
   };
 }
 const c2Ally   = makeCpu2(ally,   allyChar,   'ally',   'A');
+const c2Ally2  = makeCpu2(ally2,  ally2Char,  'ally2',  'A');
 const c2Enemy  = makeCpu2(enemy,  enemyChar,  'enemy',  'B');
 const c2Enemy2 = makeCpu2(enemy2, enemy2Char, 'enemy2', 'B');
-const cpu2List = [c2Ally, c2Enemy, c2Enemy2];
+const c2Enemy3 = makeCpu2(enemy3, enemy3Char, 'enemy3', 'B');
+// アクティブなCPU一覧（モードで再構築: 2vs2=3体 / 3vs3=5体）。
+let cpu2List = [c2Ally, c2Enemy, c2Enemy2];
+function rebuildCpu2List() {
+  cpu2List = teamSize >= 3
+    ? [c2Ally, c2Ally2, c2Enemy, c2Enemy2, c2Enemy3]
+    : [c2Ally, c2Enemy, c2Enemy2];
+}
 // プレイヤーを共通エンティティ形式で参照（stun はゲッターで playerStunTimer を共有）
 const playerEntity2 = { key: 'player', group: player, char: playerChar, get stun() { return playerStunTimer; } };
 
@@ -3458,19 +3496,32 @@ const ZONE_BAND        = 0.55; // ゾーン幅係数（×FIELD_HALF_D）
 
 let passState = null; // パス飛行中の状態 { passerKey, receiverKey, cutterKey, timer }
 
-const team2     = k => (k === 'player' || k === 'ally') ? 'A' : (k === 'enemy' || k === 'enemy2') ? 'B' : null;
+const TEAM_A_KEYS = ['player', 'ally', 'ally2'];
+const team2     = k => TEAM_A_KEYS.includes(k) ? 'A' : (k === 'enemy' || k === 'enemy2' || k === 'enemy3') ? 'B' : null;
 const sameTeam2 = (a, b) => team2(a) !== null && team2(a) === team2(b);
 function entity2(key) { return key === 'player' ? playerEntity2 : (cpu2List.find(c => c.key === key) || null); }
+// 同チームのエンティティ（自分以外）。プレイヤーも含む。
+function teammatesOf2(key) {
+  return [playerEntity2, ...cpu2List].filter(e => e.key !== key && sameTeam2(e.key, key));
+}
+// パス先に最適な味方（前方で開いている味方を優先）。requestPass等の単一取得用。
 function teammate2(key) {
-  if (key === 'player') return c2Ally;
-  if (key === 'ally')   return playerEntity2;
-  if (key === 'enemy')  return c2Enemy2;
-  if (key === 'enemy2') return c2Enemy;
-  return null;
+  const mates = teammatesOf2(key);
+  if (mates.length === 0) return null;
+  const gx = team2(key) === 'A' ? GOAL_X : -GOAL_X;
+  const from = entity2(key) ? entity2(key).group.position : null;
+  // 前進度（攻撃ゴール方向に進んでいるほど高評価）で選ぶ
+  let best = mates[0], bestScore = -Infinity;
+  for (const m of mates) {
+    if (m.stun > 0) continue;
+    const adv = gx > 0 ? m.group.position.x : -m.group.position.x;
+    if (adv > bestScore) { bestScore = adv; best = m; }
+  }
+  return best;
 }
 function opponents2(key) {
   const t = team2(key);
-  return [playerEntity2, c2Ally, c2Enemy, c2Enemy2].filter(e => team2(e.key) !== t);
+  return [playerEntity2, ...cpu2List].filter(e => team2(e.key) !== t);
 }
 function distXZ(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
 function nearestOpp2(c) {
@@ -3514,8 +3565,9 @@ function isClosestDefender2(c) {
 
 // ── パス実行（出し手→味方へのダイレクトパス。軌道上に敵がいればカット）──────
 const PASS_DIRECT_SPEED = 30; // 物理無視で対象へ直進する速度(m/s)
-function doPass(passerKey) {
-  const passer = entity2(passerKey), recv = teammate2(passerKey);
+function doPass(passerKey, forcedRecvKey) {
+  const passer = entity2(passerKey);
+  const recv = forcedRecvKey ? entity2(forcedRecvKey) : teammate2(passerKey);
   if (!passer || !recv) return;
   const from = passer.group.position, to = recv.group.position;
   const dx = to.x - from.x, dz = to.z - from.z;
@@ -3538,22 +3590,22 @@ function doPass(passerKey) {
   ballVel.set(ux * PASS_DIRECT_SPEED, 0, uz * PASS_DIRECT_SPEED);
   passState = { passerKey, receiverKey: recv.key, cutterKey: cutter ? cutter.key : null, timer: 0 };
 }
-function cpu2Pass(c) {
+function cpu2Pass(c, forcedRecvKey) {
   c.passing = true; c.passCd = 2.5;
   const dur = clips['pass'] ? clips['pass'].duration : 0.6;
   c.oneShotTimer = dur;
   charAnim(c.char, 'pass', false);
   const sess = skillSession;
-  setTimeout(() => { if (sess === skillSession && ballOwner === c.key) doPass(c.key); }, dur * 0.35 * 1000);
+  setTimeout(() => { if (sess === skillSession && ballOwner === c.key) doPass(c.key, forcedRecvKey); }, dur * 0.35 * 1000);
 }
 
-// プレイヤーが味方CPUにパスを要求する（味方が保持中のみ）。即座に味方→プレイヤーへ
+// プレイヤーが味方CPUにパスを要求する（味方CPUが保持中のみ）。即座にプレイヤーへ
 // ダイレクトパス。軌道上に敵がいれば通常どおりパスカットされる。
 function requestPass() {
   if (!mode2v2 || !gameStarted || isGoalScene) return;
-  if (ballOwner !== 'ally') return; // 味方が持っている時だけ要求可能
-  if (c2Ally.passing || c2Ally.kicking || c2Ally.stun > 0) return;
-  cpu2Pass(c2Ally); // teammate2('ally') = プレイヤー宛に飛ぶ
+  const c = cpu2List.find(e => e.key === ballOwner && e.team === 'A');
+  if (!c || c.passing || c.kicking || c.stun > 0) return;
+  cpu2Pass(c, 'player'); // プレイヤー宛に飛ばす
 }
 function cpu2Shoot(c) {
   if (c.kicking) return;
@@ -3618,9 +3670,7 @@ function update2v2PassFlight(dt) {
 
 // ── 2vs2 メイン更新（所有権・CPU AI・ドリブル配置・ルーズ物理を一括処理）─────
 function update2v2(dt) {
-  if (allyMixer)   allyMixer.update(dt);
-  if (enemyMixer)  enemyMixer.update(dt);
-  if (enemy2Mixer) enemy2Mixer.update(dt);
+  for (const c of cpu2List) { const mx = c.char.animState.mixer; if (mx) mx.update(dt); }
   if (!gameStarted || isGoalScene) return;
 
   for (const c of cpu2List) {
@@ -3666,10 +3716,11 @@ function update2v2(dt) {
       ballMesh.rotateOnWorldAxis(new THREE.Vector3(facing.z, 0, -facing.x), rollDir * RUN_SPEED * dt / BALL_R);
     }
     isDribbling = true;
-  } else if (ballOwner === 'ally')   { charDribble(allyChar,   dt); isDribbling = false; }
-  else if   (ballOwner === 'enemy')  { charDribble(enemyChar,  dt); isDribbling = false; }
-  else if   (ballOwner === 'enemy2') { charDribble(enemy2Char, dt); isDribbling = false; }
-  else { isDribbling = false; ballLoosePhysics(dt); }
+  } else if (ballOwner !== 'none') {
+    const c = cpu2List.find(e => e.key === ballOwner);
+    if (c) charDribble(c.char, dt);
+    isDribbling = false;
+  } else { isDribbling = false; ballLoosePhysics(dt); }
 }
 
 function update2v2Possession(dt) {
@@ -3760,26 +3811,45 @@ function update2v2Carrier(c, gx, dt) {
   charAnim(c.char, moving ? (clips['dribble'] ? 'dribble' : 'run') : 'idle');
 }
 
+// 攻撃時のオフザボール: ボールホルダーの5-10m範囲に、味方同士で被らないよう
+// 攻撃方向へ扇状に展開してポジショニングする。
+const SUPPORT_R_MIN = 5, SUPPORT_R_MAX = 10, SUPPORT_R_MID = 7.5;
 function update2v2Support(c, gx, dt) {
   const carrier = entity2(ballOwner);
   if (!carrier) { update2v2Defend(c, -gx, dt); return; }
   const cpos = carrier.group.position;
-  // 保持者と逆サイドの前方スペースへ動き、対角のパスコースを作る（密着しない）
-  const side = cpos.z >= 0 ? -1 : 1;
-  let tx = gx > 0 ? Math.min(gx - 8, cpos.x + 8) : Math.max(gx + 8, cpos.x - 8);
-  let tz = side * Math.min(FIELD_HALF_D * 0.62, Math.abs(cpos.z) + 9);
-  const no = nearestOpp2(c);
-  if (no.opp && distXZ(no.opp.group.position, { x: tx, z: tz }) < 4) tz += side * 4.5;
-  tz = Math.max(-FIELD_HALF_D * 0.72, Math.min(FIELD_HALF_D * 0.72, tz));
-  const target = new THREE.Vector3(tx, 0, tz);
-  // 保持者へ密着しない: ターゲットが近すぎたら離す
-  if (distXZ(target, cpos) < SUPPORT_MIN_SEP) {
-    const ax = target.x - cpos.x, az = target.z - cpos.z;
-    const l = Math.hypot(ax, az) || 1;
-    target.x = cpos.x + ax / l * SUPPORT_MIN_SEP;
-    target.z = cpos.z + az / l * SUPPORT_MIN_SEP;
+  const sgn  = Math.sign(gx) || 1; // 攻撃方向(+x or -x)
+
+  // 同チームのサポーター(保持者以外のCPU)を列挙し、index で扇の角度を割り当てる
+  const supporters = cpu2List.filter(o => o.team === c.team && o.key !== ballOwner);
+  const idx = Math.max(0, supporters.indexOf(c));
+  const n   = Math.max(1, supporters.length);
+  // 攻撃方向を中心に -55°..+55° へ均等配置（味方同士が被らない）
+  const spread  = (n === 1) ? 0 : ((idx / (n - 1)) - 0.5) * (Math.PI * 110 / 180);
+  const baseAng = sgn > 0 ? 0 : Math.PI;
+  const ang = baseAng + spread;
+  let tx = cpos.x + Math.cos(ang) * SUPPORT_R_MID;
+  let tz = cpos.z + Math.sin(ang) * SUPPORT_R_MID;
+
+  // 他の味方(プレイヤー含む)と近すぎたら押し離して被りを防ぐ
+  for (const m of teammatesOf2(c.key)) {
+    if (m.key === ballOwner) continue;
+    const d = distXZ({ x: tx, z: tz }, m.group.position);
+    if (d < SUPPORT_R_MIN) {
+      const ax = tx - m.group.position.x, az = tz - m.group.position.z, l = Math.hypot(ax, az) || 1;
+      tx += ax / l * (SUPPORT_R_MIN - d); tz += az / l * (SUPPORT_R_MIN - d);
+    }
   }
-  const moving = charMoveTo(c.char, target, dt);
+  // 保持者から 5-10m を維持
+  const dc = distXZ({ x: tx, z: tz }, cpos) || 1;
+  const r  = Math.max(SUPPORT_R_MIN, Math.min(SUPPORT_R_MAX, dc));
+  tx = cpos.x + (tx - cpos.x) / dc * r;
+  tz = cpos.z + (tz - cpos.z) / dc * r;
+  // フィールド内へクランプ
+  tx = Math.max(-FIELD_HALF_W + 2, Math.min(FIELD_HALF_W - 2, tx));
+  tz = Math.max(-FIELD_HALF_D * 0.85, Math.min(FIELD_HALF_D * 0.85, tz));
+
+  const moving = charMoveTo(c.char, new THREE.Vector3(tx, 0, tz), dt);
   charAnim(c.char, moving ? 'run' : 'idle');
 }
 
@@ -3824,20 +3894,26 @@ function setPieceEnabled() {
   return !isPK && !isMultiplayer && !isGoalScene && !matchOver && !goalCapture && !setPiece;
 }
 function ballTeamOf(key) {
-  if (key === 'player' || key === 'ally'  || key === 'player_gk') return 'A';
-  if (key === 'enemy'  || key === 'enemy2'|| key === 'enemy_gk')  return 'B';
+  if (key === 'player' || key === 'ally' || key === 'ally2' || key === 'player_gk') return 'A';
+  if (key === 'enemy'  || key === 'enemy2' || key === 'enemy3' || key === 'enemy_gk')  return 'B';
   return null;
 }
 
 // プレイヤーチームでタッカー(プレイヤー)に最も近い味方（2v2は味方CPU。1v1は味方なし
 // → 前方スペースへ投げる/蹴る）。GKへの後ろ向きパスはしない。
 function nearestTeammateForPlayer() {
-  if (mode2v2 && c2Ally) return c2Ally;
-  return null;
+  if (!mode2v2) return null;
+  let best = null, bd = Infinity;
+  for (const m of cpu2List) {
+    if (m.team !== 'A') continue;
+    const d = distXZ(m.group.position, player.position);
+    if (d < bd) { bd = d; best = m; }
+  }
+  return best;
 }
 // リスタート位置に最も近い敵エンティティ
 function nearestEnemyEntity(spot) {
-  const list = mode2v2 ? [c2Enemy, c2Enemy2] : (hasEnemy ? [{ key: 'enemy', group: enemy }] : []);
+  const list = mode2v2 ? cpu2List.filter(c => c.team === 'B') : (hasEnemy ? [{ key: 'enemy', group: enemy }] : []);
   let best = null, bd = Infinity;
   for (const e of list) {
     const d = distXZ(e.group.position, spot);
@@ -3902,8 +3978,9 @@ function setPieceTakerGroup() {
 // 極端にボール前へ集めず、攻撃側はボックス/受けに広がり、守備側はゴール前/受け手をケア。
 function repositionForSetPiece(kind, takerKey, takerPos) {
   const atk = ballTeamOf(takerKey), def = atk === 'A' ? 'B' : 'A';
-  const outfield = t => mode2v2 ? (t === 'A' ? ['player', 'ally'] : ['enemy', 'enemy2'])
-                                : (t === 'A' ? ['player'] : ['enemy']);
+  const outfield = t => mode2v2
+    ? [playerEntity2, ...cpu2List].filter(e => team2(e.key) === t).map(e => e.key)
+    : (t === 'A' ? ['player'] : ['enemy']);
   const atkGoalX = atk === 'A' ? GOAL_X : -GOAL_X;
   const sgn = Math.sign(atkGoalX);
   const HW = FIELD_HALF_W, HD = FIELD_HALF_D;
@@ -4307,10 +4384,11 @@ function animate() {
         let targetAng = player.rotation.y;
         if (mode2v2 && !isMoving && gkBallHolder === 'none') {
           let holderPos = null;
-          if      (ballOwner === 'ally')   holderPos = ally.position;
-          else if (ballOwner === 'enemy')  holderPos = enemy.position;
-          else if (ballOwner === 'enemy2') holderPos = enemy2.position;
-          else if (ballOwner === 'none')   holderPos = ballMesh.position; // ルーズ=ボールを向く
+          if (ballOwner === 'none') holderPos = ballMesh.position; // ルーズ=ボールを向く
+          else if (ballOwner !== 'player') {
+            const h = cpu2List.find(c => c.key === ballOwner);
+            if (h) holderPos = h.group.position;
+          }
           if (holderPos) {
             const dx = holderPos.x - player.position.x, dz = holderPos.z - player.position.z;
             if (dx * dx + dz * dz > 0.25) targetAng = Math.atan2(-dx, -dz);
@@ -4565,9 +4643,10 @@ document.addEventListener('touchcancel', e => { for (const t of e.changedTouches
     // #btn-pass はCSSで display:none を指定しているため、表示時は明示的に flex を入れる
     // （'' だとCSSのnoneに戻り、ボタンが出ないため）。
     if (passBtn) {
-      const showPass = mode2v2 && (ballOwner === 'player' || ballOwner === 'ally');
+      const allyHolds = ballOwner !== 'player' && ballTeamOf(ballOwner) === 'A'; // 味方CPU保持
+      const showPass = mode2v2 && (ballOwner === 'player' || allyHolds);
       passBtn.style.display = showPass ? 'flex' : 'none';
-      if (showPass) passBtn.textContent = ballOwner === 'ally' ? 'パス要求' : 'パス';
+      if (showPass) passBtn.textContent = allyHolds ? 'パス要求' : 'パス';
     }
   }
   // animate() から呼べるようにグローバル化

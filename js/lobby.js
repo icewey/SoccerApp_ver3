@@ -362,6 +362,27 @@ function start2v2() {
   });
 }
 
+// 3vs3: プレイヤー＋味方CPU2人 vs 敵CPU3人
+function start3v3() {
+  const char = CHARACTERS[selectedIdx];
+  if (!char.available) return;
+  requestFullscreen();
+  const pool = CHARACTERS.filter((c, i) => c.available && i !== selectedIdx);
+  const sh = pool.slice().sort(() => Math.random() - 0.5);
+  const pick = i => sh[i] || char;
+  const a1 = pick(0), a2 = pick(1), e1 = pick(2), e2 = pick(3), e3 = pick(4);
+  closeLobbyAndLoad();
+  startGame({
+    charFbx: char.fbx, charId: char.id, fieldSize,
+    mode3v3: true,
+    allyFbx:   a1.fbx, allyId:   a1.id,
+    ally2Fbx:  a2.fbx, ally2Id:  a2.id,
+    enemy1Fbx: e1.fbx, enemy1Id: e1.id,
+    enemy2Fbx: e2.fbx, enemy2Id: e2.id,
+    enemy3Fbx: e3.fbx, enemy3Id: e3.id,
+  });
+}
+
 function init() {
   render();
   initCarousel();
@@ -378,6 +399,7 @@ function init() {
   document.getElementById('lb-kickoff').addEventListener('click', kickOff);
   document.getElementById('lb-pk').addEventListener('click', startPK);
   document.getElementById('lb-2v2').addEventListener('click', start2v2);
+  document.getElementById('lb-3v3')?.addEventListener('click', start3v3);
 
   // ── モード切替 ───────────────────────────────────────────────────
   function setMode(real) {
