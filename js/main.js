@@ -3818,6 +3818,8 @@ function update2v2Defend(c, defendGoalX, dt) {
 let lastTouchTeam = null;        // 'A'(プレイヤー側) | 'B'(敵側)
 let setPiece = null;             // { kind, timer, ready } プレイヤーが蹴る時のみ
 const SETPIECE_SETUP_TIME = 3.0; // 蹴る前の準備（モーション表示）秒数
+const THROW_RELEASE_FRAC  = 0.55; // スローインモーションのどこでボールを放すか(0..1)
+const THROW_BALL_Y        = 2.15; // スローイン中ボールを頭上の手元に保持する高さ(m)
 function setPieceEnabled() {
   return !isPK && !isMultiplayer && !isGoalScene && !matchOver && !goalCapture && !setPiece;
 }
@@ -3967,7 +3969,12 @@ function updateSetPiecePhase(dt) {
   setPiece.timer -= dt;
   if (setPiece.timer > 0) return;
   if (setPiece.phase === 'announce') {
-    setPiece.phase = 'setup'; setPiece.timer = SETPIECE_SETUP_TIME;
+    setPiece.phase = 'setup';
+    // スローインはモーションの放球フレームで投げる（モーション終わりを待つラグを排除）。
+    // コーナーは従来どおり準備3秒。
+    setPiece.timer = (setPiece.kind === 'throwin')
+      ? (clips['throw_in'] ? clips['throw_in'].duration * THROW_RELEASE_FRAC : 0.8)
+      : SETPIECE_SETUP_TIME;
     hideSetPieceAnnounce();
     startTakerMotion();
   } else { // phase === 'setup'
@@ -3986,14 +3993,16 @@ function launchSetPieceBall(from, target, kind, atkGoalX) {
   ballOwner = 'none'; isDribbling = false;
   const lofted  = kind === 'corner';
   const vy      = lofted ? 12 : 7;                       // コーナー=高めのクロス / スロー=低め
-  const flightT = 2 * vy / BALL_GRAVITY;                 // 着地までの概算時間
+  // スローインは頭上の手元(THROW_BALL_Y)から放球、コーナーは地面から。
+  const startY  = lofted ? BALL_R + 0.1 : THROW_BALL_Y - 0.15;
+  // 放球高さ→地面 までの実飛行時間（高い位置から放るほど長く飛ぶので補正）
+  const flightT = (vy + Math.sqrt(vy * vy + 2 * BALL_GRAVITY * Math.max(0, startY - BALL_R))) / BALL_GRAVITY;
   const hSpd    = Math.min(lofted ? 38 : 30, Math.max(11, dist / Math.max(0.35, flightT)));
   // カーブ向き: 攻撃ゴール側(中央)へ巻く。立ち位置zの符号×攻撃方向で決定。
   const cmag    = lofted ? 0.6 : 0.85;
   const curve   = cmag * (Math.sign(from.z) || 1) * (Math.sign(atkGoalX ?? GOAL_X) || 1);
   const aInit   = aStraight - 0.5 * curve * flightT;     // 逆に半分プリ回転
   const sx = Math.sin(aInit), sz = Math.cos(aInit);
-  const startY = lofted ? BALL_R + 0.1 : 1.3;
   ballMesh.position.set(from.x + sx * 0.5, startY, from.z + sz * 0.5);
   ballVel.set(sx * hSpd, vy, sz * hSpd);
   ballCurveRate = curve;
@@ -4056,7 +4065,13 @@ function startGoalKick(team) {
 function updateSetPieceHold() {
   const g = setPieceTakerGroup();
   if (!g) return;
-  ballMesh.position.set(g.position.x, BALL_R, g.position.z);
+  if (setPiece.kind === 'throwin') {
+    // スローイン: ボールを頭上の手元に保持（地面ではなく）。やや前方に持つ。
+    const f = new THREE.Vector3(-Math.sin(g.rotation.y), 0, -Math.cos(g.rotation.y));
+    ballMesh.position.set(g.position.x + f.x * 0.25, THROW_BALL_Y, g.position.z + f.z * 0.25);
+  } else {
+    ballMesh.position.set(g.position.x, BALL_R, g.position.z);
+  }
   ballVel.set(0, 0, 0);
 }
 
