@@ -308,9 +308,11 @@ function startKick(lofted, curve, power) {
   if (playerStunTimer > 0) return; // スタン中は操作不可
   endSpin();              // スピン中のシュートはスピンを打ち切ってから蹴る（状態固着防止）
   isKicking = true;
-  kickGlide = playerHasMoveInput() ? 1 : 0; // 移動中なら滑りながら蹴る
   const dur = clips['kick'].duration;
   kickTimer = dur / KICK_SPEED + 0.1; // 再生が速くなる分ロックも短く（保険）
+  // 移動中なら滑りながら蹴る。減速はキックモーション全体に広げて自然に止める。
+  kickGlide = playerHasMoveInput() ? 1 : 0;
+  kickGlideTime = kickTimer;
   fadeToClip('kick', false);
   const act = mixer.clipAction(clips['kick']);
   act.setEffectiveTimeScale(KICK_SPEED); // 速く再生
@@ -393,9 +395,11 @@ function startPass() {
   if (playerStunTimer > 0 || !clips['pass'] || !mixer) return;
   endSpin();
   isPassing = true;
-  kickGlide = playerHasMoveInput() ? 1 : 0; // 移動中なら滑りながらパス
   const dur = clips['pass'].duration;
   passTimer = dur + 0.15; // 保険: finished取りこぼし時もこの時間で必ず解除
+  // 移動中なら滑りながらパス。減速はパスモーション全体に広げて自然に止める。
+  kickGlide = playerHasMoveInput() ? 1 : 0;
+  kickGlideTime = passTimer;
   fadeToClip('pass', false);
   const sess = skillSession;
   setTimeout(() => { if (sess === skillSession && ballOwner === 'player') doPass('player'); },
@@ -3048,9 +3052,9 @@ const MOVE_SPEED   = 8;
 const RUN_SPEED    = 11;   // 通常移動速度（少し遅く）
 const TURN_SPEED   = 1.2;
 // シュート/パスのモーション中の「滑り(グライド)」: 急停止せず減速しながら進む
-const KICK_GLIDE_MAX  = 0.55; // 開始時の速度（RUN_SPEED比）
-const KICK_GLIDE_TIME = 0.4;  // この秒数でグライドが0へ減衰
+const KICK_GLIDE_MAX  = 0.9;  // 開始時の速度（RUN_SPEED比）。高めで初速の急落を防ぐ
 let kickGlide = 0;            // 0..1。シュート/パス開始時に1（移動入力時のみ）→減衰
+let kickGlideTime = 0.5;     // グライドが0へ減衰する秒数（=キック/パス硬直の長さ）
 const TACKLE_LOCK  = 0.7;  // タックルの操作ロック時間（clip全長1.77sは長すぎるため短い前進ランジに）
 let FIELD_HALF_W = 51;
 let FIELD_HALF_D = 33;
@@ -4476,7 +4480,7 @@ function animate() {
     // 減速しながら滑る。通常速度ではなく徐々に止まる自然な慣性。
     if (!playerFrozenBySetPiece() && playerStunTimer <= 0 && !isTackling && !isSpinning
         && (isKicking || isPassing) && kickGlide > 0) {
-      kickGlide = Math.max(0, kickGlide - dt / KICK_GLIDE_TIME);
+      kickGlide = Math.max(0, kickGlide - dt / Math.max(0.2, kickGlideTime));
       const camDir   = new THREE.Vector3(-Math.sin(viewAngle), 0, -Math.cos(viewAngle));
       const camRight = new THREE.Vector3( Math.cos(viewAngle), 0, -Math.sin(viewAngle));
       const mv = new THREE.Vector3();
