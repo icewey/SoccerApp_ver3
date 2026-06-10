@@ -4086,20 +4086,24 @@ function startTakerMotion() {
   else { charAnim(entity2(setPiece.takerKey).char, c, false); }
 }
 
-// フェーズ進行: announce(告知1.3s) → setup(準備3s) → ready(ボタン/CPU自動実行)
+// フェーズ進行: announce(告知1.3s) → setup → ready(ボタン/CPU自動実行) → acting(押下後のモーション)
 function updateSetPiecePhase(dt) {
-  if (!setPiece || setPiece.ready) return;
+  if (!setPiece || setPiece.ready || setPiece.phase === 'acting') return;
   setPiece.timer -= dt;
   if (setPiece.timer > 0) return;
   if (setPiece.phase === 'announce') {
     setPiece.phase = 'setup';
-    // スローインはモーションの放球フレームで投げる（モーション終わりを待つラグを排除）。
-    // コーナーは従来どおり準備3秒。
-    setPiece.timer = (setPiece.kind === 'throwin')
-      ? (clips['throw_in'] ? clips['throw_in'].duration * THROW_RELEASE_FRAC : 0.8)
-      : SETPIECE_SETUP_TIME;
     hideSetPieceAnnounce();
-    startTakerMotion();
+    if (setPiece.takerKey === 'player') {
+      // プレイヤーはモーションを再生せず、すぐボタン表示。実際のモーションは押下時のみ。
+      setPiece.timer = 0.25;
+    } else {
+      // CPUはモーションを表示し、放球フレームで自動実行。
+      setPiece.timer = (setPiece.kind === 'throwin')
+        ? (clips['throw_in'] ? clips['throw_in'].duration * THROW_RELEASE_FRAC : 0.8)
+        : SETPIECE_SETUP_TIME;
+      startTakerMotion();
+    }
   } else { // phase === 'setup'
     setPiece.ready = true;
     if (setPiece.takerKey === 'player') showSetPieceUI(setPiece.kind);
@@ -4184,36 +4188,56 @@ function startGoalKick(team) {
   lastTouchTeam = team;
 }
 
-// セットプレー準備中: 蹴り手の足元にボールを保持し続ける
+// セットプレー準備中: 蹴り手の足元(/手元)にボールを保持し続ける
 function updateSetPieceHold() {
   const g = setPieceTakerGroup();
   if (!g) return;
   if (setPiece.kind === 'throwin') {
-    // スローイン: ボールを頭上の手元に保持（地面ではなく）。やや前方に持つ。
+    // スロー: モーション再生中(=acting / CPUのsetup)は頭上、待機中は胸元の手で保持。
+    const motion = setPiece.phase === 'acting'
+      || (setPiece.takerKey !== 'player' && setPiece.phase === 'setup');
+    const y = motion ? THROW_BALL_Y : 1.35;
     const f = new THREE.Vector3(-Math.sin(g.rotation.y), 0, -Math.cos(g.rotation.y));
-    ballMesh.position.set(g.position.x + f.x * 0.25, THROW_BALL_Y, g.position.z + f.z * 0.25);
+    ballMesh.position.set(g.position.x + f.x * 0.25, y, g.position.z + f.z * 0.25);
   } else {
     ballMesh.position.set(g.position.x, BALL_R, g.position.z);
   }
   ballVel.set(0, 0, 0);
 }
 
-// ── パス（プレイヤーのスロー/コーナー）。準備(3秒)後のみ受付。────────────────
+// プレイヤーのセットプレー: 押下時に近くの味方を狙う目標を計算する。
+function playerSetPieceTarget(kind) {
+  const from = player.position;
+  const mate = mode2v2 ? passReceiverForPlayer() : null; // 向きに応じた近くの味方
+  if (mate && mate.group) return mate.group.position.clone();
+  if (kind === 'corner')  return new THREE.Vector3(GOAL_X - 9, 0, (Math.random() - 0.5) * 6); // 箱中央
+  return new THREE.Vector3(Math.min(FIELD_HALF_W - 4, from.x + 11), 0, from.z * 0.35);          // 前方
+}
+
+// ── パス（プレイヤーのスロー/コーナー）。押下時にモーション再生→放球フレームで発射。──
+let _setPieceActSession = 0;
 function setPiecePass() {
   if (!setPiece || !setPiece.ready || setPiece.takerKey !== 'player') return;
   const kind = setPiece.kind;
-  setPiece = null;
   hideSetPieceUI();
-  const from = player.position.clone();
-  // 味方がいれば(向きに応じた)味方へ。いなければコーナー=箱中央へクロス/スロー=前方へ。
-  const mate = mode2v2 ? passReceiverForPlayer() : null;
-  let target;
-  if (mate && mate.group) target = mate.group.position.clone();
-  else if (kind === 'corner') target = new THREE.Vector3(GOAL_X - 9, 0, (Math.random() - 0.5) * 6);
-  else target = new THREE.Vector3(Math.min(FIELD_HALF_W - 4, from.x + 11), 0, from.z * 0.35);
-  launchSetPieceBall(from, target, kind, GOAL_X);
-  enemyPickupCooldown = 0.4; // 受け手が拾いやすいよう一瞬敵を抑える
-  lastTouchTeam = 'A';
+  // モーション再生開始（蹴り手は acting フェーズで固定したまま放球フレームまで再生）。
+  setPiece.phase = 'acting'; setPiece.ready = false;
+  const clipName = kind === 'corner' ? 'corner_kick' : 'throw_in';
+  if (mixer && clips[clipName]) fadeToClip(clipName, false);
+  const dur = clips[clipName] ? clips[clipName].duration : 0.8;
+  // 放球タイミング（モーションの接触フレーム）。長尺クリップでも待たせすぎない上限。
+  const releaseT = Math.min(dur * (kind === 'corner' ? 0.5 : THROW_RELEASE_FRAC), 1.5);
+  const sess = ++_setPieceActSession;
+  setTimeout(() => {
+    if (sess !== _setPieceActSession || !setPiece) return;
+    // 放球フレームで近くの味方へ発射（モーションしながらパス）。
+    const target = playerSetPieceTarget(kind);
+    launchSetPieceBall(player.position.clone(), target, kind, GOAL_X);
+    enemyPickupCooldown  = 0.4; // 受け手(敵)が拾いやすいよう一瞬抑える
+    playerPickupCooldown = 0.8; // 蹴り手(自分)が自分の投球を即回収しないように
+    lastTouchTeam = 'A';
+    setPiece = null;
+  }, releaseT * 1000);
 }
 
 // ── ドリブル（プレイヤーのコーナーのみ）。準備(3秒)後のみ受付。──────────────
