@@ -446,7 +446,8 @@ let chigiriBoostTimer = 0; // 千切ブースト残り時間（>0で加速・奪
 let bachiraSkillTimer = 0; // 蜂楽スキル残り時間（>0で操作ロック・奪取不可・黄オーラ）
 let bachiraSkillTotal = 0;
 let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
-let barouSkillTimer   = 0; // 馬狼スキル残り時間（>0で赤黒い稲妻エフェクト）
+let barouSkillTimer   = 0; // 馬狼スキル残り時間（>0で本体に赤黒い稲妻）
+let barouBallFxTimer  = 0; // 馬狼シュート飛行中の軌道イナズマ残り時間
 
 // スキル発動中フラグの“署名”。dispatch前後で変化したら＝スキルが実際に発動した、と判定。
 // （ドリブル外でのスピン等、内部ガードで不発のときはチャージを消費しないため）
@@ -872,7 +873,7 @@ function clearYukiSwirl() {
 
 // 馬狼: ほんの少し曲がる強烈カーブシュート（赤黒の残像）
 const BAROU_HIT_FRAC = 0.32; // 接触タイミング（実測: 足が前方頂点 t≈0.7/2.2）
-const BAROU_POWER    = 34;   // 強烈な水平初速
+const BAROU_POWER    = 56;   // 強烈な水平初速（威力大幅アップ）
 const BAROU_CURVE    = 0.4;  // ほんの少しだけ曲げる
 const BAROU_FOLLOW   = 0.5;  // 接触後のフォロースルー時間（これ以降のジョグ部は再生しない）
 function barouCurveShot() {
@@ -897,9 +898,10 @@ function barouCurveShot() {
     const kickAngle = ry - playerFootSign * BAROU_CURVE * (Math.PI / 8);
     ballOwner = 'none'; isDribbling = false; ballSpin.set(0, 0, 0);
     ballMesh.position.set(player.position.x + fwd.x * 0.5, BALL_R + 0.1, player.position.z + fwd.z * 0.5);
-    ballVel.set(-Math.sin(kickAngle) * BAROU_POWER, 9, -Math.cos(kickAngle) * BAROU_POWER);
+    ballVel.set(-Math.sin(kickAngle) * BAROU_POWER, 8, -Math.cos(kickAngle) * BAROU_POWER);
     ballCurveRate = playerFootSign * BAROU_CURVE; // 控えめなカーブ
     setBallTrail([0xcc1111, 0x0a0a0a], THREE.NormalBlending); // 赤黒の軌道
+    barouBallFxTimer = 1.8; // 飛行中の軌道に赤黒イナズマを走らせる
   }, tHit * 1000);
 }
 
@@ -2101,7 +2103,7 @@ function mpResetAfterGoal() {
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
-  barouSkillTimer = 0;
+  barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
   yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
@@ -2220,7 +2222,7 @@ function resetAfterGoal(scorer) {
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
-  barouSkillTimer = 0;
+  barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
   yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
@@ -2384,7 +2386,7 @@ function pkPlaceForKick() {
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
-  barouSkillTimer = 0;
+  barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
   yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
@@ -2678,7 +2680,7 @@ export function startGame(config) {
   skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
   bachiraSkillTimer = 0;
-  barouSkillTimer = 0;
+  barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
   yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
@@ -3319,6 +3321,38 @@ function spawnCharGhost(color) {
 // ── 馬狼: 本体にまとう赤黒い稲妻エフェクト ─────────────────────────────────
 const barouBolts = [];
 let _barouBoltTimer = 0;
+let _barouBallBoltTimer = 0;
+// 飛行中のボール周囲に走る赤黒のギザギザ稲妻（軌道エフェクト）
+function spawnBarouBallBolt() {
+  const c   = ballMesh.position;
+  const dir = ballVel.clone().setY(0);
+  if (dir.lengthSq() < 0.01) dir.set(0, 0, 1);
+  dir.normalize();
+  const len   = 0.7 + Math.random() * 1.0;        // ボールの進行方向に沿って伸びる
+  const start = c.clone().addScaledVector(dir, -len * 0.5);
+  const segs  = 6;
+  const pts   = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    pts.push(new THREE.Vector3(
+      start.x + dir.x * len * t + (Math.random() - 0.5) * 0.45,
+      c.y + (Math.random() - 0.5) * 0.55,
+      start.z + dir.z * len * t + (Math.random() - 0.5) * 0.45
+    ));
+  }
+  const geom  = new THREE.BufferGeometry().setFromPoints(pts);
+  const black = Math.random() < 0.35;
+  const mat   = new THREE.LineBasicMaterial({
+    color: isReo() ? (black ? 0x4a1a7a : REO_FX1) : (black ? 0x0a0000 : 0xff1414), // 玲王コピー時は紫
+    transparent: true,
+    opacity: black ? 0.9 : 1.0,
+    depthWrite: false,
+  });
+  const line = new THREE.Line(geom, mat);
+  line.renderOrder = 998;
+  scene.add(line);
+  barouBolts.push({ line, life: 0, maxLife: 0.08 + Math.random() * 0.1 });
+}
 function spawnBarouBolt() {
   // プレイヤー本体に巻きつくように、地面〜頭上へ走るギザギザの稲妻を1本
   const a  = Math.random() * Math.PI * 2;
@@ -3414,6 +3448,7 @@ function updateKaizerBeams(dt) {
 function updateCharFx(dt) {
   if (chigiriBoostTimer > 0) chigiriBoostTimer -= dt;
   if (barouSkillTimer > 0)   barouSkillTimer -= dt;
+  if (barouBallFxTimer > 0)  barouBallFxTimer -= dt;
 
   // 発生: 凪=常時黒オーラ / 千切=ブースト中ピンクのオーラ＋残像
   if (gameStarted && !isGoalScene) {
@@ -3450,6 +3485,16 @@ function updateCharFx(dt) {
         _barouBoltTimer = 0;
         const n = 3 + Math.floor(Math.random() * 3);
         for (let k = 0; k < n; k++) spawnBarouBolt();
+      }
+    }
+
+    // 馬狼シュートの軌道: 飛行中（ルーズ＆高速）のボール周囲に赤黒イナズマ
+    if (barouBallFxTimer > 0 && ballOwner === 'none' && ballVel.lengthSq() > 9) {
+      _barouBallBoltTimer += dt;
+      if (_barouBallBoltTimer >= 0.018) {
+        _barouBallBoltTimer = 0;
+        const n = 2 + Math.floor(Math.random() * 3);
+        for (let k = 0; k < n; k++) spawnBarouBallBolt();
       }
     }
   }
