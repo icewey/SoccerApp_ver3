@@ -1773,6 +1773,7 @@ function fadeToMixerClip(anim, name, loop = true) {
   if (anim.current && anim.current !== next) anim.current.fadeOut(0.15);
   next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
   anim.current = next;
+  anim.currentName = name; // リアル対戦で相手に「今再生中のクリップ名」を同期するため
 }
 
 // ── 共通 CPU シュート ─────────────────────────────────────────────────────
@@ -2107,7 +2108,7 @@ function mpResetAfterGoal() {
   clearStunMarks();
   playerPickupCooldown = 0;
   if (mixer)           { mixer.stopAllAction(); current = null; }
-  if (remotePeerMixer) { remotePeerMixer.stopAllAction(); remotePeerClipAct = {}; }
+  if (remotePeerMixer) { remotePeerMixer.stopAllAction(); remotePeerClipAct = {}; remoteLastAnim = null; }
   fadeToClip('idle');
   fadeToRemoteClip('idle');
   if (goalFlashEl) { goalFlashEl.style.display = 'none'; goalFlashEl.classList.remove('conceded'); }
@@ -2508,6 +2509,7 @@ let mpHandlers        = null;
 let remotePeer        = new THREE.Group();
 let remotePeerMixer   = null;
 let remotePeerClipAct = {};
+let remoteLastAnim    = null; // 相手の現在再生中クリップ名（再トリガ防止）
 let mpTimer              = 0;
 let gameWatcher          = null;
 let mpRemoteBallOwner    = 'none'; // Hostが配信した所有者 'host' | 'guest' | 'none'
@@ -2562,13 +2564,19 @@ function interpBuf(buf, renderTime) {
   return result;
 }
 
+// ループ再生するクリップ（これら以外は一回再生＝kick/pass/tackle/spin/スキル）
+const REMOTE_LOOP_ANIMS = new Set(['idle', 'run', 'dribble', 'chigiri_run']);
 function fadeToRemoteClip(name) {
   if (!remotePeerMixer || !clips[name]) return;
+  if (name === remoteLastAnim) return; // 同じクリップが連続で来ても再トリガしない
+  remoteLastAnim = name;
+  const loop = REMOTE_LOOP_ANIMS.has(name);
   const act = remotePeerClipAct[name]
     ?? (remotePeerClipAct[name] = remotePeerMixer.clipAction(clips[name]));
-  if (act.isRunning()) return;
-  Object.values(remotePeerClipAct).forEach(a => a.fadeOut(0.2));
-  act.reset().fadeIn(0.2).play();
+  act.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+  act.clampWhenFinished = !loop;
+  Object.values(remotePeerClipAct).forEach(a => { if (a !== act) a.fadeOut(0.15); });
+  act.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.15).play();
 }
 
 function onCoreLoaded() {
@@ -2682,7 +2690,7 @@ export function startGame(config) {
   // remotePeer の旧キャラ削除
   while (remotePeer.children.length > 0) remotePeer.remove(remotePeer.children[0]);
   scene.remove(remotePeer);
-  remotePeerMixer = null; remotePeerClipAct = {};
+  remotePeerMixer = null; remotePeerClipAct = {}; remoteLastAnim = null;
   // enemy を scene から除去（CPU戦の残骸防止）
   scene.remove(enemy);
   while (enemy.children.length > 0) enemy.remove(enemy.children[0]);
@@ -4368,7 +4376,7 @@ function animate() {
         let ryDiff = (ps.ry - remotePeer.rotation.y + Math.PI * 3) % (Math.PI * 2) - Math.PI;
         remotePeer.rotation.y += ryDiff * Math.min(1, 18 * dt);
         remotePeerMixer.update(dt);
-        fadeToRemoteClip(ps.anim !== 'idle' ? 'run' : 'idle');
+        fadeToRemoteClip(ps.anim || 'idle'); // 相手の実クリップ名をそのまま再生
       }
     }
     // 自分の状態を30Hzで送信
@@ -4377,7 +4385,9 @@ function animate() {
       mpTimer = 0;
       mpHandlers.publishPlayer(mpRole, {
         x: player.position.x, z: player.position.z,
-        ry: player.rotation.y, anim: getDesiredAnim() || 'idle',
+        ry: player.rotation.y,
+        // 今プレイヤーが実際に再生中のクリップ名を送る（kick/pass/tackle/dribble/spin/スキル含む）
+        anim: playerChar.animState?.currentName || 'idle',
         tackling:  isTackling,         // Host: 奪取判定に使用
         skillBusy: playerSkillBusy(),  // Host: スキル中は奪わない
         kick:      mpRole === 'guest' ? mpPendingKick : null, // Guest: 発射転送
