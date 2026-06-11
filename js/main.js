@@ -566,6 +566,7 @@ const FAKE_HIT_FRAC  = 0.12; // motion2 のどこで蹴り当てるか（0..1）
 const FAKE_CONTACT_H = 1.0;  // 蹴り当てる高さ(m)
 const FAKE_POWER     = 44;   // 発射の水平初速（かなり強烈）
 const FAKE_VYPOP_MAX = 13;   // 蹴り上げ初速の上限（高くなりすぎ防止 / ピーク約3.9m）
+const FAKE_SPEED     = 1.5;  // モーション全体の再生速度倍率（>1で速く）
 function nagiFakeVolley() {
   if (ballOwner !== 'player') return;
   const c1 = clips['fake01'], c2 = clips['fake02'];
@@ -576,13 +577,14 @@ function nagiFakeVolley() {
 
   endSpin();
   isKicking = true;                         // 全モーションをロックして最後まで再生
-  kickTimer = combo.duration + 0.1;
+  kickTimer = combo.duration / FAKE_SPEED + 0.1;
   fadeToClip('fake_volley', false);
+  mixer.clipAction(combo).setEffectiveTimeScale(FAKE_SPEED); // 一連を速く再生
 
-  // タイミング（連結クリップ内の絶対時刻）
-  const tPop     = c1.duration * FAKE_POP_FRAC;
-  const tContact = c1.duration + FAKE_BLEND + c2.duration * FAKE_HIT_FRAC;
-  const dtAir    = Math.max(0.2, tContact - tPop);
+  // タイミング（連結クリップ内の絶対時刻 → 再生速度で短縮した実時間に変換）
+  const tPop     = c1.duration * FAKE_POP_FRAC / FAKE_SPEED;
+  const tContact = (c1.duration + FAKE_BLEND + c2.duration * FAKE_HIT_FRAC) / FAKE_SPEED;
+  const dtAir    = Math.max(0.15, tContact - tPop);
   const h0       = ballMesh.position.y;
   // 落下してちょうど接触高さに来るポップ初速: h(dt)=h0+vy*dt-0.5g dt^2 = CONTACT_H
   // 高くなりすぎないよう上限でクランプ（上限時は接触が多少早まる）。
