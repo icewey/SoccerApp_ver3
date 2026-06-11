@@ -448,6 +448,7 @@ let bachiraSkillTotal = 0;
 let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
 let barouSkillTimer   = 0; // 馬狼スキル残り時間（>0で本体に赤黒い稲妻）
 let barouBallFxTimer  = 0; // 馬狼シュート飛行中の軌道イナズマ残り時間
+let fakeHopFxTimer    = 0; // 凪フェイクボレーのホップ中に残像を強制する残り時間
 
 // スキル発動中フラグの“署名”。dispatch前後で変化したら＝スキルが実際に発動した、と判定。
 // （ドリブル外でのスピン等、内部ガードで不発のときはチャージを消費しないため）
@@ -561,11 +562,11 @@ const FAKE_BLEND     = 0.12; // 連結時の繋ぎ目（buildComboClipと合わ�
 // 足ボーン実測: motion1は t≈0.31s(約0.42)で足が最下点＝すくい上げ接触、
 // motion2は開始直後 t≈0.1〜0.4s(約0.12)で足が前方へ鋭くスイング＝蹴り抜き。
 // 接触をmotion2前半に合わせることで滞空が短くなり、蹴り上げが低く収まる。
-const FAKE_POP_FRAC  = 0.42; // motion1 のどこでボールを上げるか（0..1）
-const FAKE_HIT_FRAC  = 0.12; // motion2 のどこで蹴り当てるか（0..1）
-const FAKE_CONTACT_H = 1.0;  // 蹴り当てる高さ(m)
+const FAKE_POP_FRAC  = 0.08; // motion1 のどこでボールを上げるか（早めに上げて滞空を稼ぐ）
+const FAKE_HIT_FRAC  = 0.12; // motion2 のどこで蹴り当てるか（0..1）＝蹴りタイミング（据え置き）
+const FAKE_POP_PEAK  = 1.95; // ホップの頂点高さ(m)：頭上を少し越える
 const FAKE_POWER     = 44;   // 発射の水平初速（かなり強烈）
-const FAKE_VYPOP_MAX = 13;   // 蹴り上げ初速の上限（高くなりすぎ防止 / ピーク約3.9m）
+const FAKE_VYPOP_MAX = 16;   // 蹴り上げ初速の上限
 const FAKE_SPEED     = 1.5;  // モーション全体の再生速度倍率（>1で速く）
 function nagiFakeVolley() {
   if (ballOwner !== 'player') return;
@@ -582,14 +583,12 @@ function nagiFakeVolley() {
   mixer.clipAction(combo).setEffectiveTimeScale(FAKE_SPEED); // 一連を速く再生
 
   // タイミング（連結クリップ内の絶対時刻 → 再生速度で短縮した実時間に変換）
+  // 蹴り(接触)のタイミングは据え置き。ホップだけ早めに上げ、落ちてきた所を蹴る。
   const tPop     = c1.duration * FAKE_POP_FRAC / FAKE_SPEED;
   const tContact = (c1.duration + FAKE_BLEND + c2.duration * FAKE_HIT_FRAC) / FAKE_SPEED;
-  const dtAir    = Math.max(0.15, tContact - tPop);
   const h0       = ballMesh.position.y;
-  // 落下してちょうど接触高さに来るポップ初速: h(dt)=h0+vy*dt-0.5g dt^2 = CONTACT_H
-  // 高くなりすぎないよう上限でクランプ（上限時は接触が多少早まる）。
-  const vyPop    = Math.min(FAKE_VYPOP_MAX,
-    (FAKE_CONTACT_H - h0 + 0.5 * BALL_GRAVITY * dtAir * dtAir) / dtAir);
+  // 頭上を少し越える頂点になるポップ初速（落下は重力任せ）。
+  const vyPop    = Math.min(FAKE_VYPOP_MAX, Math.sqrt(2 * BALL_GRAVITY * Math.max(0.3, FAKE_POP_PEAK - h0)));
 
   // スキル中はボールを拾い直されないようロック
   playerPickupCooldown = tContact + 0.3;
@@ -606,6 +605,8 @@ function nagiFakeVolley() {
     ballCurveRate = 0; ballSpin.set(0, 0, 0);
     ballMesh.position.set(player.position.x + fwd.x * 0.5, h0, player.position.z + fwd.z * 0.5);
     ballVel.set(0, vyPop, 0); // 真上
+    setBallTrail([0x080808, 0x303030], THREE.NormalBlending); // ホップ中も黒い残像
+    fakeHopFxTimer = (tContact - tPop) + 0.1; // 接触までホップ残像を強制
   }, tPop * 1000);
 
   // ② 落ちてきたボールを前方へ強烈に蹴り出す（黒い残像）
@@ -3269,8 +3270,11 @@ function spawnBallTrail() {
 }
 
 function updateBallTrail(dt) {
+  if (fakeHopFxTimer > 0) fakeHopFxTimer -= dt;
   const speed = ballVel.length();
-  if (ballOwner === 'none' && speed > TRAIL_SPEED_THR && !isGoalScene) {
+  // 凪フェイクボレーのホップ中は頂点付近で速度が落ちるため、速度に関わらず残像を出す
+  const forceTrail = fakeHopFxTimer > 0 && ballOwner === 'none' && !isGoalScene;
+  if ((forceTrail || (ballOwner === 'none' && speed > TRAIL_SPEED_THR)) && !isGoalScene) {
     _ballTrailTimer += dt;
     if (_ballTrailTimer >= TRAIL_INTERVAL) { _ballTrailTimer = 0; spawnBallTrail(); }
   } else {
