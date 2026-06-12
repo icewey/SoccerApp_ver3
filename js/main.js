@@ -1661,7 +1661,7 @@ let isGoalScene = false;
 // ── キックオフ・ホールド（ゴール後の再開時、味方のアクションを待ってからCPUが動く）──
 let kickoffHold      = false;     // true中はCPU敵が速攻せずキックオフ位置で待機
 let kickoffHoldTimer = 0;         // 自動解除までの猶予（味方が動かない場合の保険）
-const KICKOFF_GRACE  = 3.0;       // 何も操作が無くてもこの秒数で自動的に再開
+const KICKOFF_GRACE  = 10.0;      // 何も操作が無くてもこの秒数で自動的に再開
 let matchOver   = false;          // 5点先取で試合終了（リザルト表示中）
 const MATCH_TARGET = 5;           // 何点先取で終了か
 
@@ -3916,8 +3916,8 @@ function update2v2Possession(dt) {
 }
 
 function update2v2Cpu(c, dt) {
-  // キックオフ・ホールド中: 敵チーム(B)は味方のアクション待ちで待機。味方(A)は自由。
-  if (kickoffHold && c.team === 'B') { charAnim(c.char, 'idle'); charClampToField(c.char); return; }
+  // キックオフ・ホールド中: CPUは敵味方関係なく全員、ボールホルダーのアクション待ちで待機。
+  if (kickoffHold) { charAnim(c.char, 'idle'); charClampToField(c.char); return; }
   if (c.stun > 0)   { charAnim(c.char, 'idle'); charClampToField(c.char); return; }
   if (c.tackling)   { charTackleForward(c.char, dt); charClampToField(c.char); return; }
   if (c.kicking || c.passing || c.oneShotTimer > 0) { charClampToField(c.char); return; }
@@ -4409,14 +4409,16 @@ function showKickoff() {
 }
 function hideKickoff() { if (_kickoffEl) _kickoffEl.style.display = 'none'; }
 
-// キックオフ・ホールドの解除判定（味方=プレイヤーが動いた/蹴った、または猶予切れ）
+// キックオフ・ホールドの解除判定: ボールホルダー(プレイヤー保持時)がアクション
+// するまでCPUは全員停止。プレイヤーが保持していない(CPUキックオフ)時は猶予で再開。
 function updateKickoff(dt) {
   if (!kickoffHold) return;
   kickoffHoldTimer -= dt;
   const moved = keys.has('KeyW') || keys.has('ArrowUp') || keys.has('KeyS') || keys.has('ArrowDown')
              || keys.has('KeyA') || keys.has('ArrowLeft') || keys.has('KeyD') || keys.has('ArrowRight')
              || joystick.active;
-  if (kickoffHoldTimer <= 0 || moved || isKicking || isPassing || isTackling) {
+  const playerActed = ballOwner === 'player' && (moved || isKicking || isPassing || isTackling);
+  if (kickoffHoldTimer <= 0 || playerActed) {
     kickoffHold = false;
     hideKickoff();
   }
