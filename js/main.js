@@ -444,6 +444,7 @@ const isReo = () => playerSkill === 'reo_copy';
 let skillSession = 0; // スキル中の stale setTimeout を無効化するカウンタ
 let chigiriBoostTimer = 0; // 千切ブースト残り時間（>0で加速・奪取不可・ピンク残像）
 let bachiraSkillTimer = 0; // 蜂楽スキル残り時間（>0で操作ロック・奪取不可・黄オーラ）
+let nagiSkillTimer    = 0; // 凪フェイクボレー残り時間（>0で5m内の敵を❗フリーズ）
 let bachiraSkillTotal = 0;
 let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
 let barouSkillTimer   = 0; // 馬狼スキル残り時間（>0で本体に赤黒い稲妻）
@@ -577,6 +578,7 @@ function nagiFakeVolley() {
   endSpin();
   isKicking = true;                         // 全モーションをロックして最後まで再生
   kickTimer = combo.duration + 0.1;
+  nagiSkillTimer = combo.duration + 0.1;    // モーション中、5m内に入った敵を❗フリーズ
   fadeToClip('fake_volley', false);
 
   // タイミング（連結クリップ内の絶対時刻）
@@ -1011,6 +1013,29 @@ function updateBachira(dt) {
   charClampToField(playerChar);
 }
 
+// 凪フェイクボレー: モーション中、5m内に入った敵を❗マークでフリーズし続ける。
+// 範囲に入った瞬間にだけ❗を出し（マーク多重生成防止）、残りモーション時間ぶん固める。
+const NAGI_FREEZE_RAD = 5;
+function updateNagiFreeze(dt) {
+  if (nagiSkillTimer <= 0) return;
+  nagiSkillTimer -= dt;
+  const remain = nagiSkillTimer;
+  if (remain <= 0) return;
+  if (mode2v2) {
+    for (const c of cpu2List) {
+      if (c.team !== 'B') continue; // 敵チームのみ
+      if (distXZ(c.group.position, player.position) >= NAGI_FREEZE_RAD) continue;
+      if (c.stun < 0.05) spawnStunMark(c.group, remain, _exclaimTexture); // 新規凍結時だけ❗
+      c.stun = Math.max(c.stun, remain);
+    }
+  } else if (hasEnemy && enemy) {
+    if (distXZ(enemy.position, player.position) < NAGI_FREEZE_RAD) {
+      if (enemyStunTimer < 0.05) spawnStunMark(enemy, remain, _exclaimTexture);
+      enemyStunTimer = Math.max(enemyStunTimer, remain);
+    }
+  }
+}
+
 // ── 敵シュート（charShoot を使用）────────────────────────────────────────
 function enemyShoot() {
   charShoot(
@@ -1167,6 +1192,9 @@ const TACKLE_DIST = 1.6;
 function updateEnemy(dt) {
   if (!hasEnemy || !gameStarted || !enemyChar.animState?.mixer || isGoalScene) return;
   enemyChar.animState.mixer.update(dt);
+
+  // キックオフ・ホールド中: 味方(プレイヤー)のアクション待ち。敵は速攻せず待機。
+  if (kickoffHold) { charAnim(enemyChar, 'idle'); charClampToField(enemyChar); return; }
 
   // スタン（奪われた直後の硬直）中はAIを止めてその場で待機
   if (enemyStunTimer > 0) {
@@ -1630,6 +1658,10 @@ let groundY     = 0;
 let playerScore = 0;
 let cpuScore    = 0;
 let isGoalScene = false;
+// ── キックオフ・ホールド（ゴール後の再開時、味方のアクションを待ってからCPUが動く）──
+let kickoffHold      = false;     // true中はCPU敵が速攻せずキックオフ位置で待機
+let kickoffHoldTimer = 0;         // 自動解除までの猶予（味方が動かない場合の保険）
+const KICKOFF_GRACE  = 3.0;       // 何も操作が無くてもこの秒数で自動的に再開
 let matchOver   = false;          // 5点先取で試合終了（リザルト表示中）
 const MATCH_TARGET = 5;           // 何点先取で終了か
 
@@ -2102,7 +2134,7 @@ function mpResetAfterGoal() {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
-  bachiraSkillTimer = 0;
+  bachiraSkillTimer = 0; nagiSkillTimer = 0;
   barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
   yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
@@ -2221,13 +2253,16 @@ function resetAfterGoal(scorer) {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
-  bachiraSkillTimer = 0;
+  bachiraSkillTimer = 0; nagiSkillTimer = 0;
   barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
   yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
   resetBallTrail();
   clearStunMarks();
   playerPickupCooldown = 0;
+
+  // キックオフ・ホールド開始: CPUは味方(プレイヤー)のアクションを待ってから動く
+  kickoffHold = true; kickoffHoldTimer = KICKOFF_GRACE; showKickoff();
 
   pGKSt.state = 'patrol'; pGKSt.holdTimer = 0; pGKSt.patrolPhase = 0;
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.patrolPhase = 0;
@@ -2385,7 +2420,7 @@ function pkPlaceForKick() {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
-  bachiraSkillTimer = 0;
+  bachiraSkillTimer = 0; nagiSkillTimer = 0;
   barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
   yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
@@ -2679,10 +2714,11 @@ export function startGame(config) {
 
   skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
-  bachiraSkillTimer = 0;
+  bachiraSkillTimer = 0; nagiSkillTimer = 0;
   barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
   yukiTimer = 0; yukiSwirling = false; yukiBounceTimer = 0;
+  kickoffHold = false; kickoffHoldTimer = 0; hideKickoff();
   resetBallTrail();
   clearCharFx();
   cancelCharge();
@@ -3880,6 +3916,8 @@ function update2v2Possession(dt) {
 }
 
 function update2v2Cpu(c, dt) {
+  // キックオフ・ホールド中: 敵チーム(B)は味方のアクション待ちで待機。味方(A)は自由。
+  if (kickoffHold && c.team === 'B') { charAnim(c.char, 'idle'); charClampToField(c.char); return; }
   if (c.stun > 0)   { charAnim(c.char, 'idle'); charClampToField(c.char); return; }
   if (c.tackling)   { charTackleForward(c.char, dt); charClampToField(c.char); return; }
   if (c.kicking || c.passing || c.oneShotTimer > 0) { charClampToField(c.char); return; }
@@ -4350,6 +4388,40 @@ function hideSetPieceAnnounce() {
   _spaEl.style.display = 'none';
 }
 
+// ── キックオフ告知バナー（ゴール後の再開合図）─────────────────────────────
+let _kickoffEl = null;
+function showKickoff() {
+  if (!_kickoffEl) {
+    _kickoffEl = document.createElement('div');
+    _kickoffEl.id = 'kickoff-banner';
+    _kickoffEl.innerHTML = '<div style="font:800 30px/1.1 system-ui,sans-serif;letter-spacing:4px">KICK OFF</div>'
+      + '<div style="margin-top:6px;font:600 14px/1.3 system-ui,sans-serif;opacity:0.85">移動・パス・シュートで再開</div>';
+    _kickoffEl.style.cssText = [
+      'position:fixed', 'top:16%', 'left:50%', 'transform:translateX(-50%)',
+      'padding:12px 30px', 'text-align:center', 'color:#fff',
+      'background:rgba(18,22,38,0.74)', 'border:2px solid #ffd400', 'border-radius:12px',
+      'z-index:60', 'pointer-events:none', 'text-shadow:0 2px 8px rgba(0,0,0,0.6)',
+      'box-shadow:0 6px 22px rgba(0,0,0,0.45)',
+    ].join(';');
+    document.body.appendChild(_kickoffEl);
+  }
+  _kickoffEl.style.display = 'block';
+}
+function hideKickoff() { if (_kickoffEl) _kickoffEl.style.display = 'none'; }
+
+// キックオフ・ホールドの解除判定（味方=プレイヤーが動いた/蹴った、または猶予切れ）
+function updateKickoff(dt) {
+  if (!kickoffHold) return;
+  kickoffHoldTimer -= dt;
+  const moved = keys.has('KeyW') || keys.has('ArrowUp') || keys.has('KeyS') || keys.has('ArrowDown')
+             || keys.has('KeyA') || keys.has('ArrowLeft') || keys.has('KeyD') || keys.has('ArrowRight')
+             || joystick.active;
+  if (kickoffHoldTimer <= 0 || moved || isKicking || isPassing || isTackling) {
+    kickoffHold = false;
+    hideKickoff();
+  }
+}
+
 const clock = new THREE.Clock();
 
 function animate() {
@@ -4455,6 +4527,8 @@ function animate() {
   updateCharge(dt);
   updateCharFx(dt);
   if (gameStarted && !isGoalScene) updateBachira(dt);
+  if (gameStarted && !isGoalScene) updateNagiFreeze(dt);
+  if (gameStarted && !isGoalScene) updateKickoff(dt);
   if (gameStarted && !isGoalScene) updateShidouSkill(dt);
   if (gameStarted && !isGoalScene) updateYukimiyaSkill(dt);
   updateYukimiyaSwirl(dt);
