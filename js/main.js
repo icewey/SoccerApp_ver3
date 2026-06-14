@@ -2261,8 +2261,12 @@ function resetAfterGoal(scorer) {
   clearStunMarks();
   playerPickupCooldown = 0;
 
-  // キックオフ・ホールド開始: CPUは味方(プレイヤー)のアクションを待ってから動く
-  kickoffHold = true; kickoffHoldTimer = KICKOFF_GRACE; showKickoff();
+  // キックオフ・ホールド: 自分(プレイヤー)ボールの時だけCPUを待機させる。
+  // 相手ボール(CPUキックオフ)の時は待機なしで即開始。
+  // scorer==='cpu' = プレイヤー失点 → プレイヤーがキックオフ。
+  kickoffHold = (scorer === 'cpu');
+  kickoffHoldTimer = KICKOFF_GRACE;
+  if (kickoffHold) showKickoff(); else hideKickoff();
 
   pGKSt.state = 'patrol'; pGKSt.holdTimer = 0; pGKSt.patrolPhase = 0;
   eGKSt.state = 'patrol'; eGKSt.holdTimer = 0; eGKSt.patrolPhase = 0;
