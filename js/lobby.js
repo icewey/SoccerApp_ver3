@@ -330,7 +330,7 @@ function kickOff() {
     enemyFbx: enemyChar?.fbx ?? null, enemyId: enemyChar?.id ?? null });
 }
 
-// PK戦: プレイヤー vs CPUキーパー
+// 練習モード: プレイヤー vs CPUキーパー（旧PK戦）
 function startPK() {
   const char = CHARACTERS[selectedIdx];
   if (!char.available) return;
@@ -383,23 +383,59 @@ function start3v3() {
   });
 }
 
+// ── カスタムプルダウン ───────────────────────────────────────────────
+// 開いているプルダウンをすべて閉じる
+function closeAllDropdowns() {
+  document.querySelectorAll('.lb-dd.open').forEach(dd => {
+    dd.classList.remove('open');
+    dd.querySelector('.lb-dd-btn')?.setAttribute('aria-expanded', 'false');
+  });
+}
+
+// dd-<id> 要素の開閉と選択を制御し、選択時に onSelect(value) を呼ぶ
+function initDropdown(id, onSelect) {
+  const dd    = document.getElementById(`dd-${id}`);
+  const btn   = document.getElementById(`dd-${id}-btn`);
+  const valEl = document.getElementById(`dd-${id}-val`);
+  const opts  = dd.querySelectorAll('.lb-dd-opt');
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const willOpen = !dd.classList.contains('open');
+    closeAllDropdowns();
+    dd.classList.toggle('open', willOpen);
+    btn.setAttribute('aria-expanded', String(willOpen));
+  });
+  opts.forEach(opt => {
+    opt.addEventListener('click', e => {
+      e.stopPropagation();
+      opts.forEach(o => o.classList.remove('active'));
+      opt.classList.add('active');
+      valEl.textContent = opt.textContent;
+      closeAllDropdowns();
+      onSelect?.(opt.dataset.val);
+    });
+  });
+}
+
 function init() {
   render();
   initCarousel();
 
-  const fsBtns = ['full', 'medium', 'compact'];
-  fsBtns.forEach(size => {
-    document.getElementById(`fs-${size}`).addEventListener('click', () => {
-      fieldSize = size;
-      fsBtns.forEach(s => document.getElementById(`fs-${s}`).classList.remove('active'));
-      document.getElementById(`fs-${size}`).classList.add('active');
-    });
-  });
+  // フィールドサイズ／モードのプルダウン
+  let selectedMode = '1v1';
+  initDropdown('field', val => { fieldSize = val; });
+  initDropdown('mode',  val => { selectedMode = val; });
+  document.addEventListener('click', closeAllDropdowns);
 
-  document.getElementById('lb-kickoff').addEventListener('click', kickOff);
-  document.getElementById('lb-pk').addEventListener('click', startPK);
-  document.getElementById('lb-2v2').addEventListener('click', start2v2);
-  document.getElementById('lb-3v3')?.addEventListener('click', start3v3);
+  // 選択中のモードで試合を開始
+  function startSelectedMode() {
+    if      (selectedMode === '2v2')      start2v2();
+    else if (selectedMode === '3v3')      start3v3();
+    else if (selectedMode === 'practice') startPK();
+    else                                   kickOff();
+  }
+  document.getElementById('lb-kickoff').addEventListener('click', startSelectedMode);
 
   // ── モード切替 ───────────────────────────────────────────────────
   function setMode(real) {
@@ -494,7 +530,7 @@ function init() {
     } else if (e.key === 'ArrowRight') {
       stepChar(1);
     } else if (e.key === 'Enter') {
-      kickOff();
+      startSelectedMode();
     }
   });
 }

@@ -448,51 +448,103 @@
       padding: 3px 6px;
     }
 
-    /* ── toggle row (Field Size) ── */
-    .lb-tm-row {
+    /* ── select row (Field Size / Mode pulldowns) ── */
+    .lb-select-row {
       display: flex;
-      align-items: center;
-      gap: 18px;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 34px;
+      flex-wrap: wrap;
     }
-
-    .lb-tm-label {
+    .lb-field {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 9px;
+    }
+    .lb-field-label {
       font-size: 0.62rem;
       letter-spacing: 5px;
       color: rgba(255,255,255,0.32);
       text-transform: uppercase;
     }
 
-    .lb-tm-toggle {
+    /* custom dropdown */
+    .lb-dd { position: relative; }
+    .lb-dd-btn {
       display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-width: 150px;
       background: rgba(255,255,255,0.04);
-      border-radius: 11px;
-      padding: 4px;
-      gap: 4px;
-      border: 1px solid rgba(255,255,255,0.10);
-      box-shadow: inset 0 1px 3px rgba(0,0,0,0.35);
-    }
-
-    .lb-tm-btn {
-      position: relative;
-      background: transparent;
-      border: none;
-      color: rgba(255,255,255,0.42);
-      padding: 8px 22px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 0.88rem;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px;
+      padding: 10px 16px;
+      color: #fff;
+      font-size: 0.95rem;
       font-weight: 700;
       letter-spacing: 2px;
-      transition: all 0.2s;
+      cursor: pointer;
       font-family: inherit;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.35);
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
-    .lb-tm-btn.active {
+    .lb-dd-btn:hover {
+      border-color: rgba(0,212,255,0.5);
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.35), 0 0 14px rgba(0,200,255,0.18);
+    }
+    .lb-dd.open .lb-dd-btn {
+      border-color: rgba(0,212,255,0.6);
+      box-shadow: 0 0 16px rgba(0,200,255,0.28), inset 0 0 0 1px rgba(0,212,255,0.4);
+    }
+    .lb-dd-arrow {
+      font-size: 0.58rem;
+      color: rgba(0,212,255,0.85);
+      transition: transform 0.22s;
+    }
+    .lb-dd.open .lb-dd-arrow { transform: rotate(180deg); }
+
+    .lb-dd-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0; right: 0;
+      margin: 0;
+      padding: 5px;
+      list-style: none;
+      background: rgba(12,20,30,0.96);
+      border: 1px solid rgba(0,212,255,0.28);
+      border-radius: 10px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.55);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      z-index: 40;
+      opacity: 0;
+      transform: translateY(-6px);
+      pointer-events: none;
+      transition: opacity 0.18s, transform 0.18s;
+    }
+    .lb-dd.open .lb-dd-menu {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .lb-dd-opt {
+      padding: 9px 14px;
+      border-radius: 7px;
+      color: rgba(255,255,255,0.6);
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .lb-dd-opt:hover { background: rgba(0,212,255,0.12); color: #fff; }
+    .lb-dd-opt.active {
       background: linear-gradient(135deg, rgba(0,212,255,0.28), rgba(0,150,255,0.14));
       color: #fff;
-      box-shadow: 0 0 16px rgba(0,200,255,0.3), inset 0 0 0 1px rgba(0,212,255,0.45);
-      text-shadow: 0 0 10px rgba(0,212,255,0.5);
+      box-shadow: inset 0 0 0 1px rgba(0,212,255,0.45);
     }
-    .lb-tm-btn:hover:not(.active) { color: rgba(255,255,255,0.78); }
 
     /* ── action buttons (angular neon) ── */
     .lb-btn-row { display: flex; gap: 14px; align-items: stretch; justify-content: center; flex-wrap: wrap; }
@@ -544,9 +596,6 @@
       font-size: 1.08rem;
       letter-spacing: 9px;
     }
-    #lb-2v2 { --ac: #5ae696; padding: 16px 30px; font-size: 1rem; letter-spacing: 4px; }
-    #lb-3v3 { --ac: #4ad8e6; padding: 16px 30px; font-size: 1rem; letter-spacing: 4px; }
-    #lb-pk  { --ac: #ffd24a; padding: 16px 30px; font-size: 1rem; letter-spacing: 4px; }
 
     /* ── keyboard hint ── */
     .lb-hint {
@@ -908,8 +957,8 @@
       .lb-nav-prev { left: 1%; }
       .lb-nav-next { right: 1%; }
       #lb-kickoff { padding: 13px 38px; font-size: 0.9rem; letter-spacing: 5px; }
-      #lb-2v2, #lb-3v3, #lb-pk { padding: 13px 20px; font-size: 0.9rem; }
-      .lb-tm-btn  { padding: 7px 16px; }
+      .lb-dd-btn  { min-width: 130px; padding: 9px 14px; font-size: 0.88rem; }
+      .lb-select-row { gap: 22px; }
       #skill-charges { top: 10px; right: 10px; }
       .sc-cube { width: 17px; height: 17px; }
       #mr-score { font-size: 2.6rem; letter-spacing: 5px; }
@@ -1010,19 +1059,41 @@
 
       <!-- CPU対戦コントロール -->
       <div id="cpu-controls">
-        <div class="lb-tm-row">
-          <span class="lb-tm-label">Field Size</span>
-          <div class="lb-tm-toggle">
-            <button class="lb-tm-btn active" id="fs-full">11v11</button>
-            <button class="lb-tm-btn"        id="fs-medium">8v8</button>
-            <button class="lb-tm-btn"        id="fs-compact">5v5</button>
+        <div class="lb-select-row">
+          <!-- フィールドサイズ プルダウン -->
+          <div class="lb-field">
+            <span class="lb-field-label">Field Size</span>
+            <div class="lb-dd" id="dd-field">
+              <button class="lb-dd-btn" id="dd-field-btn" aria-haspopup="listbox" aria-expanded="false">
+                <span class="lb-dd-val" id="dd-field-val">11v11</span>
+                <span class="lb-dd-arrow">▼</span>
+              </button>
+              <ul class="lb-dd-menu" id="dd-field-menu" role="listbox">
+                <li class="lb-dd-opt active" data-val="full"    role="option">11v11</li>
+                <li class="lb-dd-opt"        data-val="medium"  role="option">8v8</li>
+                <li class="lb-dd-opt"        data-val="compact" role="option">5v5</li>
+              </ul>
+            </div>
+          </div>
+          <!-- モード プルダウン -->
+          <div class="lb-field">
+            <span class="lb-field-label">Mode</span>
+            <div class="lb-dd" id="dd-mode">
+              <button class="lb-dd-btn" id="dd-mode-btn" aria-haspopup="listbox" aria-expanded="false">
+                <span class="lb-dd-val" id="dd-mode-val">1vs1</span>
+                <span class="lb-dd-arrow">▼</span>
+              </button>
+              <ul class="lb-dd-menu" id="dd-mode-menu" role="listbox">
+                <li class="lb-dd-opt active" data-val="1v1"      role="option">1vs1</li>
+                <li class="lb-dd-opt"        data-val="2v2"      role="option">2vs2</li>
+                <li class="lb-dd-opt"        data-val="3v3"      role="option">3vs3</li>
+                <li class="lb-dd-opt"        data-val="practice" role="option">練習モード</li>
+              </ul>
+            </div>
           </div>
         </div>
         <div class="lb-btn-row">
           <button class="lb-act" id="lb-kickoff">KICK OFF</button>
-          <button class="lb-act" id="lb-2v2">2vs2</button>
-          <button class="lb-act" id="lb-3v3">3vs3</button>
-          <button class="lb-act" id="lb-pk">PK戦</button>
         </div>
         <span class="lb-hint">ドラッグ / ← → で選択　　Enter でスタート</span>
       </div>
