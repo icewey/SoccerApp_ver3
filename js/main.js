@@ -5138,10 +5138,15 @@ function animate() {
     smoothCamTarget.lerp(pivot, t);
     camera.position.copy(smoothCamTarget).add(camOffset);
     // 見る先(画面中心)はピボットより少し上＋進行方向リードでフレーミング。
-    // この offset は viewAngle 非依存なので回転ピボットには影響しない。
+    // リードはワールド方向のままだと、視点を回した瞬間その分が画面横方向に
+    // 投影されてプレイヤーが画面端へ押し出される。これを防ぐため、リードの
+    // 「カメラ前後成分」だけを使う（横成分=画面左右ズレを捨てる）。これで視点を
+    // どう回してもプレイヤーは水平方向で常に中心に保たれ、前進時のみ前方が映る。
+    const camFwd = new THREE.Vector3(-Math.sin(viewAngle), 0, -Math.cos(viewAngle));
+    const leadFwd = camFwd.multiplyScalar(camLead.dot(camFwd));
     const lookAt = smoothCamTarget.clone()
       .add(new THREE.Vector3(0, camRig.tgtY - CAM_PIVOT_Y, 0))
-      .add(camLead);
+      .add(leadFwd);
     camera.lookAt(lookAt);
   } // end gameStarted
 
