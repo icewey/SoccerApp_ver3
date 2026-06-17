@@ -3654,9 +3654,10 @@ function _buildReoChameleon() {
 // 玲王のスキルが実際に発動した瞬間に呼ぶ。本体に巻きつく紫のカメレオンを一瞬表示。
 function spawnReoChameleon() {
   const fx = _buildReoChameleon();
-  fx.life = 0; fx.maxLife = 0.8; fx.spin = (Math.random() < 0.5 ? 1 : -1);
+  fx.life = 0; fx.maxLife = 0.8; fx.size = 1.9; // size=全体倍率(デカく)
   fx.group.position.set(player.position.x, player.position.y + 0.95, player.position.z);
-  fx.group.scale.setScalar(0.5);
+  fx.group.rotation.y = player.rotation.y + Math.PI / 2; // 頭(+X)を進行方向へ
+  fx.group.scale.setScalar(0.5 * fx.size);
   fx.group.renderOrder = 997;
   scene.add(fx.group);
   reoChameleons.push(fx);
@@ -3962,8 +3963,8 @@ function updateCharFx(dt) {
     const t = c.life / c.maxLife;
     // 出現で 0.5→1.12 にオーバーシュートし 1.0 へ収束
     const s = t < 0.22 ? 0.5 + (t / 0.22) * 0.62 : 1.12 - Math.min(1, (t - 0.22) / 0.18) * 0.12;
-    c.group.scale.setScalar(s);
-    c.group.rotation.y += c.spin * 2.2 * dt;
+    c.group.scale.setScalar(s * c.size);
+    c.group.rotation.y = player.rotation.y + Math.PI / 2; // 進行方向で向き固定(スピン無し)
     c.group.position.set(player.position.x, player.position.y + 0.95, player.position.z);
     // 不透明度: 0.15で立ち上げ、0.45以降フェードアウト
     const env = t < 0.15 ? t / 0.15 : (t > 0.45 ? 1 - (t - 0.45) / 0.55 : 1);
