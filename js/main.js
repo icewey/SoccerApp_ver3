@@ -3582,8 +3582,8 @@ function spawnCharGhost(color) {
 const reoChameleons = [];
 
 function _buildReoChameleon() {
-  const group  = new THREE.Group();
-  const geos   = [];
+  const group   = new THREE.Group();
+  const geos    = [];
   const matFill = new THREE.MeshBasicMaterial({
     color: REO_FX1, transparent: true, opacity: 0.30,
     blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
@@ -3591,45 +3591,62 @@ function _buildReoChameleon() {
   const matEdge = new THREE.LineBasicMaterial({
     color: REO_FX2, transparent: true, opacity: 0.85, depthWrite: false,
   });
-  const addFill = (geo, parent) => {
+  // 塗りメッシュ＋(任意で)輪郭線を持つパーツを生成して group に追加。
+  // 頭=+X / 尾=-X / 上=+Y の自然な横向きポーズでカメレオンを組む。
+  const part = (geo, opt = {}) => {
     geos.push(geo);
     const m = new THREE.Mesh(geo, matFill);
-    (parent || group).add(m);
+    if (opt.pos) m.position.set(opt.pos[0], opt.pos[1], opt.pos[2]);
+    if (opt.rot) m.rotation.set(opt.rot[0], opt.rot[1], opt.rot[2]);
+    if (opt.scl) m.scale.set(opt.scl[0], opt.scl[1], opt.scl[2]);
+    if (opt.edge) { const eg = new THREE.EdgesGeometry(geo); geos.push(eg); m.add(new THREE.LineSegments(eg, matEdge)); }
+    group.add(m);
     return m;
   };
 
-  // 巻きつく胴体〜尾: 螺旋カーブ。t=0側を尾の渦(半径小)、t=1側を頭(上)に。
-  const pts = [];
-  const TURNS = 1.6, SEG = 52;
-  for (let i = 0; i <= SEG; i++) {
-    const t   = i / SEG;
-    const ang = t * TURNS * Math.PI * 2;
-    const rad = t < 0.25 ? 0.06 + (t / 0.25) * 0.50 : 0.56; // 尾だけ内側へ絞る
-    const y   = -0.42 + t * 0.62;                            // 下から上へ巻き上がる
-    pts.push(new THREE.Vector3(Math.cos(ang) * rad, y, Math.sin(ang) * rad));
-  }
-  const curve = new THREE.CatmullRomCurve3(pts);
-  const tube  = new THREE.TubeGeometry(curve, SEG, 0.085, 5, false); // 放射5分割=ローポリ
-  addFill(tube);
-  group.add(new THREE.LineSegments(new THREE.EdgesGeometry(tube), matEdge));
+  // 胴体: ファセットの効いたローポリ楕円体。
+  part(new THREE.IcosahedronGeometry(0.3, 1), { scl: [1.5, 0.9, 0.72], edge: true });
 
-  // 頭部: 螺旋の終点(上)に。接線方向を向く低ポリの吻＋クレスト＋目玉。
-  const headPos = pts[pts.length - 1];
-  const tangent = curve.getTangent(1).normalize();
-  const head    = new THREE.Group();
-  head.position.copy(headPos);
-  head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent); // +Y→進行方向
-  group.add(head);
-
-  const snout = addFill(new THREE.ConeGeometry(0.15, 0.34, 5), head); // 吻(前方)
-  snout.position.y = 0.14;
-  const crest = addFill(new THREE.ConeGeometry(0.13, 0.22, 4), head); // 後頭部のクレスト
-  crest.position.set(0, 0.02, -0.1);
-  crest.rotation.x = -0.5;
-  for (const sx of [-1, 1]) { // 左右に張り出す目玉(低ポリ球)
-    const eye = addFill(new THREE.SphereGeometry(0.08, 6, 5), head);
-    eye.position.set(sx * 0.11, 0.04, 0.02);
+  // 背中のギザギザ(背鰭): 小さな三角コーンを背骨沿いに。中央ほど高い。
+  for (let i = 0; i < 7; i++) {
+    const u = i / 6, x = 0.46 - u * 0.95;
+    const h = 0.20 - Math.abs(u - 0.35) * 0.18;
+    part(new THREE.ConeGeometry(0.05, Math.max(0.07, h), 4), { pos: [x, 0.26, 0], rot: [0, 0, -0.25] });
   }
+
+  // 頭部(前方 +X)
+  const hx = 0.5;
+  part(new THREE.IcosahedronGeometry(0.17, 0), { pos: [hx, 0.06, 0], scl: [1.1, 1, 0.9], edge: true });
+  part(new THREE.ConeGeometry(0.1, 0.24, 5), { pos: [hx + 0.2, 0, 0], rot: [0, 0, -Math.PI / 2] }); // 吻(前へ)
+  // カスク(後方へ反った兜状クレスト=カメレオンの象徴)
+  part(new THREE.ConeGeometry(0.2, 0.42, 4), { pos: [hx - 0.1, 0.24, 0], rot: [0, 0, 0.7], scl: [1, 1, 0.35], edge: true });
+  // 砲塔のような出目(左右)＋瞳の突起
+  for (const sz of [-1, 1]) {
+    part(new THREE.SphereGeometry(0.1, 6, 5), { pos: [hx + 0.02, 0.08, sz * 0.13] });
+    part(new THREE.ConeGeometry(0.045, 0.1, 5), { pos: [hx + 0.02, 0.08, sz * 0.21], rot: [sz * Math.PI / 2, 0, 0] });
+  }
+
+  // 4本の脚(枝を掴むように下＋外へ splay)
+  const legAt = (x, sz) => {
+    part(new THREE.ConeGeometry(0.06, 0.32, 4), { pos: [x, -0.06, sz * 0.16], rot: [Math.PI - sz * 0.5, 0, 0] });
+    part(new THREE.ConeGeometry(0.045, 0.24, 4), { pos: [x + 0.02, -0.3, sz * 0.32], rot: [Math.PI - sz * 0.95, 0, 0] });
+  };
+  legAt(0.3, 1); legAt(0.3, -1); legAt(-0.18, 1); legAt(-0.18, -1);
+
+  // 尾: 側面でクルッと巻く渦(カメレオン最大の特徴)。胴体後端から内へ。
+  const tpts = [], TCX = -0.72, TCY = 0.06;
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40, ang = t * 1.9 * Math.PI * 2, rad = 0.22 * (1 - t) + 0.03;
+    tpts.push(new THREE.Vector3(TCX + Math.cos(ang) * rad, TCY + Math.sin(ang) * rad, 0));
+  }
+  const tail = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(tpts), 40, 0.055, 5, false);
+  geos.push(tail);
+  group.add(new THREE.Mesh(tail, matFill));
+  const te = new THREE.EdgesGeometry(tail); geos.push(te);
+  group.add(new THREE.LineSegments(te, matEdge));
+
+  // 全体を少し起こして本体に張りつくように(頭が上)。
+  group.rotation.z = 0.5;
 
   return { group, matFill, matEdge, geos };
 }
