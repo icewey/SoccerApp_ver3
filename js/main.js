@@ -245,6 +245,9 @@ function kickBall(lofted = false, curve = 0, power = 1.0) {
   toBall.y = 0;
   if (toBall.length() > 2.0 && !isDribbling) return;
 
+  // 糸師冴フロー中のシュートは、どこからでもゴール左隅へ巻き込む誘導カーブに上書き。
+  if (saeSkillTimer > 0) { saeCurveShot(); return; }
+
   const pwr = power;
   const isCurve = curve !== 0;
   resetBallTrail(); // 通常シュートは青い軌道に戻す
@@ -452,6 +455,8 @@ let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
 let barouSkillTimer   = 0; // 馬狼スキル残り時間（>0で本体に赤黒い稲妻）
 let barouBallFxTimer  = 0; // 馬狼シュート飛行中の軌道イナズマ残り時間
 let saeSkillTimer     = 0; // 糸師冴フロー残り時間（>0で加速・奪取不可・ピンクのネオン数字残像）
+let saeShotActive     = false; // 糸師冴フロー中に放った誘導カーブシュートが飛行中
+const saeShotTarget   = new THREE.Vector3(); // 誘導先（攻撃側ゴールの左隅）
 
 // スキル発動中フラグの“署名”。dispatch前後で変化したら＝スキルが実際に発動した、と判定。
 // （ドリブル外でのスピン等、内部ガードで不発のときはチャージを消費しないため）
@@ -963,6 +968,31 @@ const SAE_SPEED_MULT    = 1.25; // 「気持ち速くなる」程度（千切の
 function saeFlow() {
   if (ballOwner !== 'player' || saeSkillTimer > 0) return;
   saeSkillTimer = SAE_FLOW_DURATION;
+}
+
+// 糸師冴フロー中のシュート: 攻撃側ゴールの「左隅」へ誘導する高速バナナシュート。
+// 初速はゴール中央寄りに撃ち出し、飛行中に左隅へ巻き込む（ballLoosePhysicsで誘導）。
+const SAE_SHOT_HSPD = 30;   // 水平初速(m/s)
+const SAE_SHOT_VY   = 6;    // 打ち出しの上向き初速（以降は誘導でvyを上書き）
+const SAE_SHOT_LOCK = 3.5;  // 左隅へ向く追従の強さ（大きいほど速く向く＝カーブがきつい）
+const SAE_CORNER_Z  = 0.82; // ゴール左隅のz位置（×GOAL_HALF_Z, ポストの少し内側）
+const SAE_CORNER_Y  = 0.7;  // 左隅の高さ(m)（低い隅を狙う）
+function saeCurveShot() {
+  // プレイヤーが攻めるゴール（ソロ/MPホスト=+X / MPゲスト=-X）
+  const atkX     = (isMultiplayer && mpRole === 'guest') ? -GOAL_X : GOAL_X;
+  const leftSign = atkX > 0 ? -1 : 1; // 進行方向から見た左（+X攻め=-Z / -X攻め=+Z）
+  saeShotTarget.set(atkX, SAE_CORNER_Y, leftSign * GOAL_HALF_Z * SAE_CORNER_Z);
+
+  // 初速はゴール中央(z=0)方向へ撃ち出す → 飛行中に左隅へ巻き込まれてカーブに見える。
+  const a0 = Math.atan2(atkX - ballMesh.position.x, 0 - ballMesh.position.z);
+  ballVel.set(Math.sin(a0) * SAE_SHOT_HSPD, SAE_SHOT_VY, Math.cos(a0) * SAE_SHOT_HSPD);
+  ballCurveRate = 0;        // マグナスは使わず誘導でカーブさせる
+  ballSpin.set(0, 0, 0);
+  isDribbling   = false;
+  ballOwner     = 'none';
+  kickBallFollow = false;
+  saeShotActive = true;
+  setBallTrail(SAE_TRAIL_COLORS, THREE.AdditiveBlending); // ピンクの軌道
 }
 
 // 蜂楽: 急加速(motion2)のみのドリブル突破。
@@ -1526,8 +1556,30 @@ function updateBall(dt) {
 function ballLoosePhysics(dt) {
   // 通常物理
   ballVel.y -= BALL_GRAVITY * dt;
+  // 糸師冴の誘導カーブシュート: 水平はゴール左隅へ向き続け、垂直は左隅の高さへ到達
+  // するようvyを毎フレーム解く（＝どこから撃ってもほぼ確実に左隅へ巻き込む）。
+  if (saeShotActive && ballOwner === 'none') {
+    const dx  = saeShotTarget.x - ballMesh.position.x;
+    const dz  = saeShotTarget.z - ballMesh.position.z;
+    const dxz = Math.hypot(dx, dz);
+    const hSpd = Math.hypot(ballVel.x, ballVel.z) || SAE_SHOT_HSPD;
+    // 水平: 現在の進行角を左隅方向へ指数追従（初速の中央向きから巻き込む＝カーブ）
+    const curAng = Math.atan2(ballVel.x, ballVel.z);
+    const tgtAng = Math.atan2(dx, dz);
+    let dA = tgtAng - curAng;
+    while (dA >  Math.PI) dA -= 2 * Math.PI;
+    while (dA < -Math.PI) dA += 2 * Math.PI;
+    const na = curAng + dA * Math.min(1, SAE_SHOT_LOCK * dt);
+    ballVel.x = Math.sin(na) * hSpd;
+    ballVel.z = Math.cos(na) * hSpd;
+    // 垂直: 残り時間で左隅の高さに着くようvyを設定（重力ぶんを補正）
+    const t = Math.max(0.05, dxz / hSpd);
+    ballVel.y = (saeShotTarget.y - ballMesh.position.y + 0.5 * BALL_GRAVITY * t * t) / t;
+    // ゴールラインを越えた/十分近づいたら誘導終了（以降は通常物理）
+    if (Math.abs(ballMesh.position.x) >= Math.abs(saeShotTarget.x) - 0.2 || dxz < 0.6) saeShotActive = false;
+  }
   // カーブ: 空中で水平速度ベクトルを回転させてバナナ軌道（マグナス効果）
-  if (ballCurveRate !== 0 && ballMesh.position.y > BALL_R + 0.05) {
+  else if (ballCurveRate !== 0 && ballMesh.position.y > BALL_R + 0.05) {
     const hSpd = Math.sqrt(ballVel.x * ballVel.x + ballVel.z * ballVel.z);
     if (hSpd > 0.1) {
       const a = Math.atan2(ballVel.x, ballVel.z) + ballCurveRate * dt;
@@ -1542,6 +1594,7 @@ function ballLoosePhysics(dt) {
     const bounced = ballVel.y < -0.5;
     ballVel.y = bounced ? ballVel.y * -BALL_BOUNCE : 0;
     ballCurveRate = 0; // 着地でカーブ終了
+    saeShotActive = false; // 着地で誘導終了（以降は通常のルーズボール）
     // 雪宮スキル: 最初の地面バウンドで物理法則を無視して左斜め前へ跳ねる（固定ベクトル）
     if (bounced && yukiBounceTimer > 0) {
       const flx = -Math.sin(yukiAngle) - Math.cos(yukiAngle); // sFwd.x + sLeft.x（左斜め前）
@@ -3378,6 +3431,8 @@ const TRAIL_OPACITY   = 0.55;
 // 軌道の色はシュート種別ごとに切り替える。デフォルトは青(加算で光る)。
 // 暗い色(黒/赤黒)は加算だと見えないので NormalBlending を指定する。
 const TRAIL_DEFAULT_COLORS = [0x3da5ff];
+// 糸師冴の誘導シュート用: 鮮ピンク→マゼンタ→白ピンクを巡回させ、光るネオンの筋に。
+const SAE_TRAIL_COLORS = [0xff2d9b, 0xff66c4, 0xffd9ec];
 let ballTrailColors = TRAIL_DEFAULT_COLORS;
 let ballTrailBlend  = THREE.AdditiveBlending;
 let _trailColorIdx  = 0;
@@ -3386,7 +3441,7 @@ function setBallTrail(colors, blend) {
   if (isReo()) { colors = [REO_FX1, REO_FX2]; blend = THREE.AdditiveBlending; }
   ballTrailColors = colors; ballTrailBlend = blend;
 }
-function resetBallTrail() { ballTrailColors = TRAIL_DEFAULT_COLORS; ballTrailBlend = THREE.AdditiveBlending; }
+function resetBallTrail() { ballTrailColors = TRAIL_DEFAULT_COLORS; ballTrailBlend = THREE.AdditiveBlending; saeShotActive = false; }
 
 function spawnBallTrail() {
   const color = ballTrailColors[_trailColorIdx++ % ballTrailColors.length];
@@ -3400,6 +3455,36 @@ function spawnBallTrail() {
   mesh.position.copy(ballMesh.position);
   scene.add(mesh);
   ballTrail.push({ mesh, life: 0, maxLife: TRAIL_MAX_LIFE });
+  if (saeShotActive) spawnSaeShotHalo();
+}
+
+// 糸師冴シュートの追加フレア: ボールを包む大きめの淡いピンクのグロー＋飛び散る火花。
+function spawnSaeShotHalo() {
+  // ふわっと大きいピンクのハロー（コメットの芯）
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(BALL_R * 2.3, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xff2d9b, transparent: true, opacity: 0.32,
+      blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  halo.position.copy(ballMesh.position);
+  scene.add(halo);
+  ballTrail.push({ mesh: halo, life: 0, maxLife: TRAIL_MAX_LIFE * 1.3 });
+  // 後方へ散るピンクの火花を1〜2個
+  const n = 1 + (Math.random() < 0.5 ? 1 : 0);
+  for (let k = 0; k < n; k++) {
+    const sp = new THREE.Mesh(
+      new THREE.SphereGeometry(BALL_R * (0.35 + Math.random() * 0.35), 6, 6),
+      new THREE.MeshBasicMaterial({ color: 0xff8fd4, transparent: true, opacity: 0.8,
+        blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    sp.position.set(
+      ballMesh.position.x + (Math.random() - 0.5) * 0.5,
+      ballMesh.position.y + (Math.random() - 0.5) * 0.5,
+      ballMesh.position.z + (Math.random() - 0.5) * 0.5
+    );
+    scene.add(sp);
+    ballTrail.push({ mesh: sp, life: 0, maxLife: TRAIL_MAX_LIFE * 0.7 });
+  }
 }
 
 function updateBallTrail(dt) {
@@ -4458,7 +4543,7 @@ function cpuSetPieceAct() {
 }
 
 function startGoalKick(team) {
-  ballOwner = 'none'; ballVel.set(0, 0, 0); ballCurveRate = 0; isDribbling = false;
+  ballOwner = 'none'; ballVel.set(0, 0, 0); ballCurveRate = 0; saeShotActive = false; isDribbling = false;
   if (team === 'A') {
     const gy = playerGKChar.group.userData.gkGroundOffset ?? groundY;
     playerGKChar.group.position.set(-(GOAL_X - GK_X_OFFSET), gy, 0);
