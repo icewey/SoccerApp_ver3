@@ -231,11 +231,20 @@ const JOY_MAX  = 55; // ドラッグの最大半径(px)
 const joyBase  = document.getElementById('joystick-base');
 const joyKnob  = document.getElementById('joystick-knob');
 
-// ── 右半分スワイプ（視線回転）─────────────────────────────────────────────
-const lookSwipe = { active: false, id: -1, prevX: 0 };
-const LOOK_SENSITIVITY = 0.003; // rad/px
+// ── 右プニコン（カメラ水平回転）───────────────────────────────────────────
+// 左プニコン=移動、右プニコン=カメラアングルを水平に回す。デフォルトの自動追従は無し。
+const lookStick = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+const joyBaseR  = document.getElementById('joystick-base-r');
+const joyKnobR  = document.getElementById('joystick-knob-r');
+const LOOK_STICK_RATE = 2.6; // rad/s（右スティック最大倒しでのカメラ回転速度）
 
-// カメラ視点角（Q/E/スワイプで制御。プレイヤー体の向きとは独立）
+// 右画面ダブルタップ → プレイヤーの進行方向へ素早くアングルスナップ
+let viewSnapping = false;
+const DOUBLE_TAP_MS = 300;     // この間隔内の2タップでダブルタップ成立
+let lastRightTapAt  = 0;
+const VIEW_SNAP_RATE = 14;     // スナップ追従の速さ（大きいほど速い）
+
+// カメラ視点角（Q/E/右プニコン/ダブルタップで制御。プレイヤー体の向きとは独立）
 let viewAngle = 0;
 
 // curve: 0=直線 / +1=右利き(右へ蹴り出し左へ曲がる) / -1=左利き(左右反転)
@@ -4884,29 +4893,27 @@ function animate() {
       }
 
       charClampToField(playerChar);
+    }
 
-      // 視点の遅延追従。移動中はプレイヤーの向き（=進行方向）に追従。
-      // 2vs2で静止時はデフォルトでボール保持者の方を向く（ルーズ時はボール）。
-      // 自分が保持中はその場の向きを維持。GK保持中は作動させず（投げたら切替）。
-      if (!keys.has('KeyQ') && !keys.has('KeyE') && !lookSwipe.active) {
-        const isMoving = moveVec.lengthSq() > 0.001;
-        let targetAng = player.rotation.y;
-        if (mode2v2 && !isMoving && gkBallHolder === 'none') {
-          let holderPos = null;
-          if (ballOwner === 'none') holderPos = ballMesh.position; // ルーズ=ボールを向く
-          else if (ballOwner !== 'player') {
-            const h = cpu2List.find(c => c.key === ballOwner);
-            if (h) holderPos = h.group.position;
-          }
-          if (holderPos) {
-            const dx = holderPos.x - player.position.x, dz = holderPos.z - player.position.z;
-            if (dx * dx + dz * dz > 0.25) targetAng = Math.atan2(-dx, -dz);
-          }
+    // ── カメラアングル制御（右プニコン / ダブルタップ）──────────────────────
+    // デフォルトの自動追従（ボール/向きへ自動回転）は廃止。カメラは右プニコン・
+    // Q/E・右画面ダブルタップでのみ動く。
+    if (!playerFrozenBySetPiece()) {
+      // 右プニコン: 水平の倒し量に比例してカメラを水平回転（レート制御）。
+      if (lookStick.active && Math.abs(lookStick.dx) > 0.05) {
+        viewAngle -= lookStick.dx * LOOK_STICK_RATE * dt;
+      }
+      // 右画面ダブルタップ → プレイヤーの進行方向（向き）へ素早くスナップ。
+      if (viewSnapping) {
+        if (lookStick.active || keys.has('KeyQ') || keys.has('KeyE')) {
+          viewSnapping = false; // 手動操作が入ったらキャンセル
+        } else {
+          let snapDiff = player.rotation.y - viewAngle;
+          while (snapDiff >  Math.PI) snapDiff -= 2 * Math.PI;
+          while (snapDiff < -Math.PI) snapDiff += 2 * Math.PI;
+          viewAngle += snapDiff * Math.min(1, VIEW_SNAP_RATE * dt);
+          if (Math.abs(snapDiff) < 0.03) viewSnapping = false;
         }
-        let camDiff = targetAng - viewAngle;
-        while (camDiff >  Math.PI) camDiff -= 2 * Math.PI;
-        while (camDiff < -Math.PI) camDiff += 2 * Math.PI;
-        viewAngle += camDiff * Math.min(1, 1.5 * dt); // ゆっくり追従（約1〜2秒で追いつく）
       }
     }
 
@@ -5069,12 +5076,24 @@ document.addEventListener('touchstart', e => {
       joyBase.style.left = t.clientX + 'px';
       joyBase.style.top  = t.clientY + 'px';
       joyKnob.style.transform = 'translate(-50%,-50%)';
-    } else if (!isBtn && t.clientX >= window.innerWidth * 0.5 && !lookSwipe.active) {
-      // ボタン以外の右半分タッチ → 視線回転スワイプ開始
+    } else if (!isBtn && t.clientX >= window.innerWidth * 0.5 && !lookStick.active) {
+      // ボタン以外の右半分タッチ → 右プニコン（カメラ回転）開始
       e.preventDefault();
-      lookSwipe.active = true;
-      lookSwipe.id = t.identifier;
-      lookSwipe.prevX = t.clientX;
+      // ダブルタップ判定 → 進行方向へアングルスナップ
+      const now = performance.now();
+      if (now - lastRightTapAt < DOUBLE_TAP_MS) viewSnapping = true;
+      lastRightTapAt = now;
+
+      lookStick.active = true;
+      lookStick.id = t.identifier;
+      lookStick.ox = t.clientX;
+      lookStick.oy = t.clientY;
+      lookStick.dx = 0;
+      lookStick.dy = 0;
+      joyBaseR.style.display = 'block';
+      joyBaseR.style.left = t.clientX + 'px';
+      joyBaseR.style.top  = t.clientY + 'px';
+      joyKnobR.style.transform = 'translate(-50%,-50%)';
     }
   }
 }, { passive: false });
@@ -5092,11 +5111,16 @@ document.addEventListener('touchmove', e => {
       joystick.dy = (len > 0 ? ddy / len : 0) * cl / JOY_MAX;
       joyKnob.style.transform =
         `translate(calc(-50% + ${joystick.dx * JOY_MAX}px), calc(-50% + ${joystick.dy * JOY_MAX}px))`;
-    } else if (t.identifier === lookSwipe.id) {
-      // 右スワイプで視線回転（viewAngle を変える。プレイヤー体は変えない）
-      const dx = t.clientX - lookSwipe.prevX;
-      lookSwipe.prevX = t.clientX;
-      viewAngle -= dx * LOOK_SENSITIVITY;
+    } else if (t.identifier === lookStick.id) {
+      // 右プニコン: 倒し量を dx/dy に正規化（dx を毎フレームの回転レートに使う）
+      const ddx = t.clientX - lookStick.ox;
+      const ddy = t.clientY - lookStick.oy;
+      const len = Math.sqrt(ddx * ddx + ddy * ddy);
+      const cl  = Math.min(len, JOY_MAX);
+      lookStick.dx = (len > 0 ? ddx / len : 0) * cl / JOY_MAX;
+      lookStick.dy = (len > 0 ? ddy / len : 0) * cl / JOY_MAX;
+      joyKnobR.style.transform =
+        `translate(calc(-50% + ${lookStick.dx * JOY_MAX}px), calc(-50% + ${lookStick.dy * JOY_MAX}px))`;
     }
   }
 }, { passive: false });
@@ -5109,9 +5133,12 @@ function releaseTouch(id) {
     joystick.dy = 0;
     joyBase.style.display = 'none';
   }
-  if (id === lookSwipe.id) {
-    lookSwipe.active = false;
-    lookSwipe.id = -1;
+  if (id === lookStick.id) {
+    lookStick.active = false;
+    lookStick.id = -1;
+    lookStick.dx = 0;
+    lookStick.dy = 0;
+    joyBaseR.style.display = 'none';
   }
 }
 // キャプチャ段階で受ける: ボタンの touchend が stopPropagation してもジョイ

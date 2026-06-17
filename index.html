@@ -193,8 +193,8 @@
       transition: width 40ms linear;
     }
 
-    /* プニコン */
-    #joystick-base {
+    /* プニコン（左=移動 / 右=カメラ） */
+    #joystick-base, #joystick-base-r {
       display: none;
       position: fixed;
       width: 120px; height: 120px;
@@ -205,7 +205,7 @@
       z-index: 60;
       transform: translate(-50%, -50%);
     }
-    #joystick-knob {
+    #joystick-knob, #joystick-knob-r {
       position: absolute;
       width: 52px; height: 52px;
       background: rgba(255,255,255,0.45);
@@ -1262,8 +1262,9 @@
   <!-- 没入カメラ切替（試合中のみ表示 / キーボードは V） -->
   <button id="btn-cam" class="active">没入ON</button>
 
-  <!-- プニコン -->
+  <!-- プニコン（左=移動 / 右=カメラ） -->
   <div id="joystick-base"><div id="joystick-knob"></div></div>
+  <div id="joystick-base-r"><div id="joystick-knob-r"></div></div>
 
   <!-- タッチ操作ボタン（右側のみ） -->
   <div id="touch-controls">
