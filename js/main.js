@@ -530,9 +530,10 @@ function useReoSkill(idx) {
   const before = skillActiveSig();
   fireSkillByName(entry.skill);
 
-  if (limited && skillActiveSig() !== before) {
-    skillCharges = Math.max(0, skillCharges - 1);
-    renderSkillCharges();
+  // 実際に発動したときだけ: 紫のカメレオンを一瞬まとう＋チャージ消費
+  if (skillActiveSig() !== before) {
+    spawnReoChameleon();
+    if (limited) { skillCharges = Math.max(0, skillCharges - 1); renderSkillCharges(); }
   }
 }
 
@@ -3575,6 +3576,75 @@ function spawnCharGhost(color) {
   charGhosts.push({ mesh, life: 0, maxLife: 0.35, baseOp: 0.45 });
 }
 
+// ── 玲王: スキル発動の一瞬だけ本体に纏う紫の透明なカメレオン(ローポリ)VFX ────
+// FBXは無いので手続き生成。巻きつく螺旋の胴体〜尾(チューブ)＋頭部(クレスト/目)で
+// 「カメレオンが巻きついた」シルエットを作り、ポップ→フェードで一瞬だけ見せる。
+const reoChameleons = [];
+
+function _buildReoChameleon() {
+  const group  = new THREE.Group();
+  const geos   = [];
+  const matFill = new THREE.MeshBasicMaterial({
+    color: REO_FX1, transparent: true, opacity: 0.30,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const matEdge = new THREE.LineBasicMaterial({
+    color: REO_FX2, transparent: true, opacity: 0.85, depthWrite: false,
+  });
+  const addFill = (geo, parent) => {
+    geos.push(geo);
+    const m = new THREE.Mesh(geo, matFill);
+    (parent || group).add(m);
+    return m;
+  };
+
+  // 巻きつく胴体〜尾: 螺旋カーブ。t=0側を尾の渦(半径小)、t=1側を頭(上)に。
+  const pts = [];
+  const TURNS = 1.6, SEG = 52;
+  for (let i = 0; i <= SEG; i++) {
+    const t   = i / SEG;
+    const ang = t * TURNS * Math.PI * 2;
+    const rad = t < 0.25 ? 0.06 + (t / 0.25) * 0.50 : 0.56; // 尾だけ内側へ絞る
+    const y   = -0.42 + t * 0.62;                            // 下から上へ巻き上がる
+    pts.push(new THREE.Vector3(Math.cos(ang) * rad, y, Math.sin(ang) * rad));
+  }
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const tube  = new THREE.TubeGeometry(curve, SEG, 0.085, 5, false); // 放射5分割=ローポリ
+  addFill(tube);
+  group.add(new THREE.LineSegments(new THREE.EdgesGeometry(tube), matEdge));
+
+  // 頭部: 螺旋の終点(上)に。接線方向を向く低ポリの吻＋クレスト＋目玉。
+  const headPos = pts[pts.length - 1];
+  const tangent = curve.getTangent(1).normalize();
+  const head    = new THREE.Group();
+  head.position.copy(headPos);
+  head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent); // +Y→進行方向
+  group.add(head);
+
+  const snout = addFill(new THREE.ConeGeometry(0.15, 0.34, 5), head); // 吻(前方)
+  snout.position.y = 0.14;
+  const crest = addFill(new THREE.ConeGeometry(0.13, 0.22, 4), head); // 後頭部のクレスト
+  crest.position.set(0, 0.02, -0.1);
+  crest.rotation.x = -0.5;
+  for (const sx of [-1, 1]) { // 左右に張り出す目玉(低ポリ球)
+    const eye = addFill(new THREE.SphereGeometry(0.08, 6, 5), head);
+    eye.position.set(sx * 0.11, 0.04, 0.02);
+  }
+
+  return { group, matFill, matEdge, geos };
+}
+
+// 玲王のスキルが実際に発動した瞬間に呼ぶ。本体に巻きつく紫のカメレオンを一瞬表示。
+function spawnReoChameleon() {
+  const fx = _buildReoChameleon();
+  fx.life = 0; fx.maxLife = 0.8; fx.spin = (Math.random() < 0.5 ? 1 : -1);
+  fx.group.position.set(player.position.x, player.position.y + 0.95, player.position.z);
+  fx.group.scale.setScalar(0.5);
+  fx.group.renderOrder = 997;
+  scene.add(fx.group);
+  reoChameleons.push(fx);
+}
+
 // ── 糸師冴: ピンクのネオン数字が残像のように舞うエフェクト ───────────────────
 // Canvasで0〜9をネオン発光に焼いたテクスチャを初回だけ生成し再利用。
 // 各数字スプライトは少し上に漂いながらフェードして「残像」を作る。
@@ -3868,6 +3938,27 @@ function updateCharFx(dt) {
     g.sprite.material.opacity = 0.9 * (1 - t);
     if (g.life >= g.maxLife) { scene.remove(g.sprite); g.sprite.material.dispose(); saeGlyphs.splice(i, 1); }
   }
+  // 玲王のカメレオンVFX: ポップ→保持→フェード。本体に追従しつつ回転。
+  for (let i = reoChameleons.length - 1; i >= 0; i--) {
+    const c = reoChameleons[i];
+    c.life += dt;
+    const t = c.life / c.maxLife;
+    // 出現で 0.5→1.12 にオーバーシュートし 1.0 へ収束
+    const s = t < 0.22 ? 0.5 + (t / 0.22) * 0.62 : 1.12 - Math.min(1, (t - 0.22) / 0.18) * 0.12;
+    c.group.scale.setScalar(s);
+    c.group.rotation.y += c.spin * 2.2 * dt;
+    c.group.position.set(player.position.x, player.position.y + 0.95, player.position.z);
+    // 不透明度: 0.15で立ち上げ、0.45以降フェードアウト
+    const env = t < 0.15 ? t / 0.15 : (t > 0.45 ? 1 - (t - 0.45) / 0.55 : 1);
+    c.matFill.opacity = 0.30 * env;
+    c.matEdge.opacity = 0.85 * env;
+    if (c.life >= c.maxLife) {
+      scene.remove(c.group);
+      for (const geo of c.geos) geo.dispose();
+      c.matFill.dispose(); c.matEdge.dispose();
+      reoChameleons.splice(i, 1);
+    }
+  }
 }
 
 function clearCharFx() {
@@ -3876,7 +3967,8 @@ function clearCharFx() {
   for (const g of saeGlyphs)     { scene.remove(g.sprite); g.sprite.material.dispose(); }
   for (const b of barouBolts)    { scene.remove(b.sprite); b.sprite.material.dispose(); }
   for (const k of kaizerBeams)   { for (const m of k.meshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } }
-  auraParticles.length = 0; charGhosts.length = 0; saeGlyphs.length = 0; barouBolts.length = 0; kaizerBeams.length = 0;
+  for (const c of reoChameleons) { scene.remove(c.group); for (const geo of c.geos) geo.dispose(); c.matFill.dispose(); c.matEdge.dispose(); }
+  auraParticles.length = 0; charGhosts.length = 0; saeGlyphs.length = 0; barouBolts.length = 0; kaizerBeams.length = 0; reoChameleons.length = 0;
   clearYukiSwirl();
 }
 
