@@ -2696,6 +2696,7 @@ function onCoreLoaded() {
     gameStarted = true;
     const camBtn = document.getElementById('btn-cam');
     if (camBtn) camBtn.style.display = 'flex';
+    setImmersiveCam(immersiveCam); // ボタンの表示(ON/OFF・色)を現在状態に同期
     fadeToClip('idle');
     if (hasEnemy) fadeToEnemyClip('idle');
     if (mode2v2) { for (const c of cpu2List) charAnim(c.char, 'idle'); }
@@ -3137,8 +3138,8 @@ const LEAD_MIN_MOVE = 0.01; // この移動量(/frame)未満は停止扱い→�
 // tgtY を上げると視線が前方へ倒れ、遠くのゴールがフレームに入る。
 const CAM_NORMAL    = { h: 8,   dist: 16,   tgtY: 1.2 };
 const CAM_IMMERSIVE = { h: 3.0, dist: 7.2, tgtY: 2.2 };
-let immersiveCam = false;
-const camRig = { h: 8, dist: 16, tgtY: 1.2 }; // 補間中のカメラ姿勢（プリセット間を滑らかに遷移）
+let immersiveCam = true; // デフォルトで没入モードON
+const camRig = { ...CAM_IMMERSIVE }; // 補間中のカメラ姿勢（プリセット間を滑らかに遷移）。初期は没入
 
 function setImmersiveCam(on) {
   immersiveCam = !!on;
