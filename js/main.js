@@ -258,6 +258,12 @@ const DOUBLE_TAP_MS = 300;     // この間隔内の2タップでダブルタッ
 let lastRightTapAt  = 0;
 const VIEW_SNAP_RATE = 14;     // スナップ追従の速さ（大きいほど速い）
 
+// 移動中ダブルタップ直後の短時間: 左スティックに関わらず直前の進行方向を維持。
+// スナップでカメラが急回転する間、カメラ基準の入力だと向きが乱れるのを防ぐ。
+const SNAP_MOVE_LOCK_SEC = 0.2;
+let snapMoveLockTimer = 0;
+const snapMoveLockDir = new THREE.Vector3();
+
 // カメラ視点角（Q/E/右プニコン/ダブルタップで制御。プレイヤー体の向きとは独立）
 let viewAngle = 0;
 
@@ -5038,6 +5044,16 @@ function animate() {
       if (keys.has('KeyQ')) viewAngle += TURN_SPEED * dt;
       if (keys.has('KeyE')) viewAngle -= TURN_SPEED * dt;
 
+      if (snapMoveLockTimer > 0) {
+        // ダブルタップ直後の短時間: 左スティックの向きに関わらず直前の進行方向を維持。
+        // カメラが真後ろへ急回転する間、カメラ基準入力だと向きが乱れるのを防ぐ。
+        snapMoveLockTimer -= dt;
+        const moveSpeed = RUN_SPEED * (chigiriBoostTimer > 0 ? CHIGIRI_SPEED_MULT
+          : (saeSkillTimer > 0 ? SAE_SPEED_MULT : 1));
+        player.position.addScaledVector(snapMoveLockDir, moveSpeed * dt);
+        player.rotation.y = Math.atan2(-snapMoveLockDir.x, -snapMoveLockDir.z); // 向きも固定
+        charClampToField(playerChar);
+      } else {
       const fwd      = keys.has('KeyW') || keys.has('ArrowUp');
       const bwd      = keys.has('KeyS') || keys.has('ArrowDown');
       const strafeLt = keys.has('KeyA') || keys.has('ArrowLeft');
@@ -5075,6 +5091,7 @@ function animate() {
       }
 
       charClampToField(playerChar);
+      }
     }
 
     // ── カメラアングル制御（右プニコン / ダブルタップ）──────────────────────
@@ -5277,7 +5294,16 @@ document.addEventListener('touchstart', e => {
       e.preventDefault();
       // ダブルタップ判定 → 進行方向へアングルスナップ
       const now = performance.now();
-      if (now - lastRightTapAt < DOUBLE_TAP_MS) viewSnapping = true;
+      if (now - lastRightTapAt < DOUBLE_TAP_MS) {
+        viewSnapping = true;
+        // 移動中のダブルタップなら、スナップ直後の短時間は直前の進行方向を維持する。
+        // （静止中は誤って動き出さないよう、左スティックを倒している時だけロックする）
+        const moving = joystick.active && (Math.abs(joystick.dx) > 0.05 || Math.abs(joystick.dy) > 0.05);
+        if (moving) {
+          snapMoveLockTimer = SNAP_MOVE_LOCK_SEC;
+          snapMoveLockDir.set(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+        }
+      }
       lastRightTapAt = now;
 
       lookStick.active = true;
