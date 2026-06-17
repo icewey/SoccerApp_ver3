@@ -68,6 +68,40 @@
       font-size: 0.75rem;
     }
 
+    /* ── 没入カメラ切替ボタン（試合中のみ表示） ── */
+    #btn-cam {
+      display: none;
+      position: fixed;
+      top: 12px; right: 16px;
+      z-index: 92;
+      align-items: center; justify-content: center;
+      gap: 5px;
+      padding: 8px 14px;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 20px;
+      color: rgba(255,255,255,0.78);
+      font-family: inherit;
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 2px;
+      cursor: pointer;
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      transition: all 0.2s;
+      pointer-events: all;
+      touch-action: manipulation;
+      user-select: none; -webkit-user-select: none;
+    }
+    #btn-cam::before { content: '🎥'; font-size: 0.9rem; }
+    #btn-cam:hover { background: rgba(0,0,0,0.66); color: #fff; }
+    #btn-cam.active {
+      border-color: rgba(0,212,255,0.7);
+      color: #eafbff;
+      box-shadow: 0 0 18px rgba(0,200,255,0.32);
+      background: linear-gradient(135deg, rgba(0,210,255,0.26), rgba(0,130,255,0.14));
+    }
+    @media (max-width: 600px) {
+      #btn-cam { top: 10px; right: 10px; padding: 7px 12px; font-size: 0.66rem; }
+    }
+
     /* ── タッチ操作UI（スマホのみ表示） ── */
     #touch-controls {
       display: none;
@@ -652,7 +686,7 @@
     /* ══ スキルチャージ（右上キューブ×3） ══ */
     #skill-charges {
       position: fixed;
-      top: 14px; right: 16px;
+      top: 52px; right: 16px; /* 没入カメラボタン(#btn-cam)の下に配置 */
       z-index: 90;
       display: none;
       flex-direction: column;
@@ -959,7 +993,7 @@
       #lb-kickoff { padding: 13px 38px; font-size: 0.9rem; letter-spacing: 5px; }
       .lb-dd-btn  { min-width: 130px; padding: 9px 14px; font-size: 0.88rem; }
       .lb-select-row { gap: 22px; }
-      #skill-charges { top: 10px; right: 10px; }
+      #skill-charges { top: 48px; right: 10px; }
       .sc-cube { width: 17px; height: 17px; }
       #mr-score { font-size: 2.6rem; letter-spacing: 5px; }
       .mr-btn { padding: 12px 26px; font-size: 0.9rem; }
@@ -1224,6 +1258,9 @@
   </div>
 
   <div id="info">Soccer App ver3</div>
+
+  <!-- 没入カメラ切替（試合中のみ表示 / キーボードは V） -->
+  <button id="btn-cam">没入OFF</button>
 
   <!-- プニコン -->
   <div id="joystick-base"><div id="joystick-knob"></div></div>

@@ -1592,6 +1592,9 @@ window.addEventListener('keydown', e => {
   lastKeyLog = `${e.code} | gs:${gameStarted} | rep:${e.repeat}`;
   e.preventDefault();
 
+  // V: 没入カメラ切替（凍結中でも有効にしたいのでガード前に処理）
+  if (gameStarted && e.code === 'KeyV' && !e.repeat) { toggleImmersiveCam(); return; }
+
   // PK結果画面: 任意キーで再挑戦
   if (isPK && pkState === 'done' && !e.repeat) { pkRestart(); return; }
 
@@ -2051,6 +2054,8 @@ function bindTap(el, fn) {
   el.addEventListener('click', fn);
   el.addEventListener('touchend', e => { e.preventDefault(); e.stopPropagation(); fn(); }, { passive: false });
 }
+// 没入カメラ切替ボタン（PC/スマホ共通・キーボードは V）
+bindTap(document.getElementById('btn-cam'), toggleImmersiveCam);
 if (matchResultEl) {
   bindTap(matchResultEl.querySelector('#mr-retry'), () => {
     hideMatchResult();
@@ -2689,6 +2694,8 @@ function onCoreLoaded() {
     }
     loadingEl.style.display = 'none';
     gameStarted = true;
+    const camBtn = document.getElementById('btn-cam');
+    if (camBtn) camBtn.style.display = 'flex';
     fadeToClip('idle');
     if (hasEnemy) fadeToEnemyClip('idle');
     if (mode2v2) { for (const c of cpu2List) charAnim(c.char, 'idle'); }
@@ -3123,6 +3130,26 @@ const _prevPlayerPos = new THREE.Vector3();  // 前フレームのプレイヤ�
 let _prevPlayerPosInit = false;
 const LEAD_DIST     = 3;    // 前方何メートルを中心にするか
 const LEAD_MIN_MOVE = 0.01; // この移動量(/frame)未満は停止扱い→中心をプレイヤーへ戻す
+
+// ── 没入カメラ ────────────────────────────────────────────────────────────
+// 通常: 高く真上気味の俯瞰。没入: 低く浅い入射角で、プレイヤーの全身が映る
+// ギリギリまで寄りつつ、進行方向(=敵ゴール)が視野に入る。
+// tgtY を上げると視線が前方へ倒れ、遠くのゴールがフレームに入る。
+const CAM_NORMAL    = { h: 8,   dist: 16,   tgtY: 1.2 };
+const CAM_IMMERSIVE = { h: 4.0, dist: 11.5, tgtY: 2.6 };
+let immersiveCam = false;
+const camRig = { h: 8, dist: 16, tgtY: 1.2 }; // 補間中のカメラ姿勢（プリセット間を滑らかに遷移）
+
+function setImmersiveCam(on) {
+  immersiveCam = !!on;
+  const btn = document.getElementById('btn-cam');
+  if (btn) {
+    btn.classList.toggle('active', immersiveCam);
+    btn.textContent = immersiveCam ? '没入ON' : '没入OFF';
+  }
+}
+function toggleImmersiveCam() { setImmersiveCam(!immersiveCam); }
+window._toggleImmersiveCam = toggleImmersiveCam;
 
 function getDesiredAnim() {
   if (isKicking || isPassing || isTackling) return null;
@@ -4708,9 +4735,16 @@ function animate() {
 
     // カメラ追従: ターゲット位置をスムーズに追い、そこから固定オフセット分で配置
     // （位置を直接 lerp するとカメラがプレイヤーに近づくズームが起きるため避ける）
+    // 没入/通常プリセットへ向けてカメラ姿勢を補間（切替時に滑らかに寄る/引く）
+    const camPreset = immersiveCam ? CAM_IMMERSIVE : CAM_NORMAL;
+    const ct = Math.min(1, 5 * dt);
+    camRig.h    += (camPreset.h    - camRig.h)    * ct;
+    camRig.dist += (camPreset.dist - camRig.dist) * ct;
+    camRig.tgtY += (camPreset.tgtY - camRig.tgtY) * ct;
+
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, viewAngle, 0));
-    const camOffset   = new THREE.Vector3(0, 8, 16).applyQuaternion(q);
-    const idealTarget = player.position.clone().add(new THREE.Vector3(0, 1.2, 0)).add(camLead);
+    const camOffset   = new THREE.Vector3(0, camRig.h, camRig.dist).applyQuaternion(q);
+    const idealTarget = player.position.clone().add(new THREE.Vector3(0, camRig.tgtY, 0)).add(camLead);
     const t = Math.min(1, 9 * dt);
     smoothCamTarget.lerp(idealTarget, t);
     camera.position.copy(smoothCamTarget).add(camOffset);
