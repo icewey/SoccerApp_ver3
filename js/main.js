@@ -3387,70 +3387,87 @@ function spawnCharGhost(color) {
 }
 
 // ── 馬狼: 本体にまとう赤黒い稲妻エフェクト ─────────────────────────────────
+// VFX/lightning_red|black.png（CC0スプライトシート: 8フレーム×128x512）を
+// フリップブックとしてビルボード表示する。手続き的なLineより質感のある稲妻。
 const barouBolts = [];
 let _barouBoltTimer = 0;
 let _barouBallBoltTimer = 0;
-// 飛行中のボール周囲に走る赤黒のギザギザ稲妻（軌道エフェクト）
-function spawnBarouBallBolt() {
-  const c   = ballMesh.position;
-  const dir = ballVel.clone().setY(0);
-  if (dir.lengthSq() < 0.01) dir.set(0, 0, 1);
-  dir.normalize();
-  const len   = 0.7 + Math.random() * 1.0;        // ボールの進行方向に沿って伸びる
-  const start = c.clone().addScaledVector(dir, -len * 0.5);
-  const segs  = 6;
-  const pts   = [];
-  for (let i = 0; i <= segs; i++) {
-    const t = i / segs;
-    pts.push(new THREE.Vector3(
-      start.x + dir.x * len * t + (Math.random() - 0.5) * 0.45,
-      c.y + (Math.random() - 0.5) * 0.55,
-      start.z + dir.z * len * t + (Math.random() - 0.5) * 0.45
-    ));
+
+const LIGHTNING_FRAMES = 8;
+const _boltFramesRed   = []; // 加算合成で光る赤い稲妻フレーム
+const _boltFramesBlack = []; // 通常合成で芝に映える黒い稲妻フレーム
+function _sliceLightning(tex, out) {
+  // スプライトシートを横8分割し、各フレームをUVオフセット済みクローンに切り出す。
+  // clone() は .source（GPU画像）を共有するため、アップロードは1回で済む。
+  for (let k = 0; k < LIGHTNING_FRAMES; k++) {
+    const t = tex.clone();
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    t.repeat.set(1 / LIGHTNING_FRAMES, 1);
+    t.offset.set(k / LIGHTNING_FRAMES, 0);
+    t.needsUpdate = true;
+    out.push(t);
   }
-  const geom  = new THREE.BufferGeometry().setFromPoints(pts);
-  const black = Math.random() < 0.35;
-  const mat   = new THREE.LineBasicMaterial({
-    color: isReo() ? (black ? 0x4a1a7a : REO_FX1) : (black ? 0x0a0000 : 0xff1414), // 玲王コピー時は紫
+}
+{
+  const loader = new THREE.TextureLoader();
+  loader.load('./VFX/lightning_red.png',   (t) => _sliceLightning(t, _boltFramesRed));
+  loader.load('./VFX/lightning_black.png', (t) => _sliceLightning(t, _boltFramesBlack));
+}
+
+function _makeBoltSprite(black) {
+  const frames = black ? _boltFramesBlack : _boltFramesRed;
+  if (!frames.length) return null; // テクスチャ未ロード時はこのフレームはスキップ
+  const tex = frames[(Math.random() * LIGHTNING_FRAMES) | 0];
+  let color = 0xffffff; // 赤黒はテクスチャにベイク済みなので素の白で
+  if (isReo()) color = black ? 0x6a1aa0 : REO_FX1; // 玲王コピー時のみ紫にtint
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    color,
     transparent: true,
-    opacity: black ? 0.9 : 1.0,
     depthWrite: false,
+    opacity: black ? 0.92 : 1.0,
+    blending: black ? THREE.NormalBlending : THREE.AdditiveBlending,
   });
-  const line = new THREE.Line(geom, mat);
-  line.renderOrder = 998;
-  scene.add(line);
-  barouBolts.push({ line, life: 0, maxLife: 0.08 + Math.random() * 0.1 });
+  const sp = new THREE.Sprite(mat);
+  sp.renderOrder = 998;
+  return sp;
+}
+
+// 飛行中のボール周囲に走る赤黒の稲妻（軌道エフェクト）
+function spawnBarouBallBolt() {
+  const black = Math.random() < 0.35;
+  const sp = _makeBoltSprite(black);
+  if (!sp) return;
+  const c  = ballMesh.position;
+  const sz = 0.8 + Math.random() * 0.9;
+  sp.scale.set(sz * 0.5, sz, 1);            // 縦長フレーム（1:4）を控えめに
+  sp.material.rotation = Math.random() * Math.PI; // 軌道なので向きはランダム
+  sp.position.set(
+    c.x + (Math.random() - 0.5) * 0.55,
+    c.y + (Math.random() - 0.5) * 0.45,
+    c.z + (Math.random() - 0.5) * 0.55
+  );
+  scene.add(sp);
+  barouBolts.push({ sprite: sp, life: 0, maxLife: 0.07 + Math.random() * 0.1 });
 }
 function spawnBarouBolt() {
-  // プレイヤー本体に巻きつくように、地面〜頭上へ走るギザギザの稲妻を1本
-  const a  = Math.random() * Math.PI * 2;
-  const r  = 0.12 + Math.random() * 0.3;        // 体に近づける
-  const bx = player.position.x + Math.cos(a) * r;
-  const bz = player.position.z + Math.sin(a) * r;
-  const segs = 7;
-  const y0 = 0.05, y1 = 1.8 + Math.random() * 0.5;
-  const pts = [];
-  for (let i = 0; i <= segs; i++) {
-    const t = i / segs;
-    pts.push(new THREE.Vector3(
-      bx + (Math.random() - 0.5) * 0.32,
-      y0 + (y1 - y0) * t,
-      bz + (Math.random() - 0.5) * 0.32
-    ));
-  }
-  const geom = new THREE.BufferGeometry().setFromPoints(pts);
-  // 赤黒: 鮮やかな赤を通常合成で（緑の芝でも赤く見える）、約3割を黒で混在
-  const black = Math.random() < 0.32;
-  const mat  = new THREE.LineBasicMaterial({
-    color: isReo() ? (black ? 0x4a1a7a : REO_FX1) : (black ? 0x0a0000 : 0xff1414), // 玲王は紫稲妻
-    transparent: true,
-    opacity: black ? 0.9 : 1.0,
-    depthWrite: false,
-  });
-  const line = new THREE.Line(geom, mat);
-  line.renderOrder = 998;
-  scene.add(line);
-  barouBolts.push({ line, life: 0, maxLife: 0.06 + Math.random() * 0.09 });
+  // プレイヤー本体に巻きつくように、地面〜頭上へ走る縦の稲妻を1本
+  const black = Math.random() < 0.32; // 約3割を黒で混在
+  const sp = _makeBoltSprite(black);
+  if (!sp) return;
+  const a = Math.random() * Math.PI * 2;
+  const r = 0.12 + Math.random() * 0.35;    // 体に近づける
+  const h = 1.9 + Math.random() * 0.8;      // 縦稲妻の高さ
+  sp.scale.set(0.45 + Math.random() * 0.5, h, 1);
+  sp.material.rotation = (Math.random() - 0.5) * 0.5; // わずかに傾ける
+  sp.position.set(
+    player.position.x + Math.cos(a) * r,
+    h * 0.5,                                 // 地面〜頭上に収まるよう中心を半分の高さに
+    player.position.z + Math.sin(a) * r
+  );
+  scene.add(sp);
+  barouBolts.push({ sprite: sp, life: 0, maxLife: 0.06 + Math.random() * 0.1 });
 }
 
 // ── カイザー: 超高速シュートの青白レーザービーム ───────────────────────────
@@ -3570,9 +3587,9 @@ function updateCharFx(dt) {
   for (let i = barouBolts.length - 1; i >= 0; i--) {
     const b = barouBolts[i];
     b.life += dt;
-    b.line.material.opacity *= 0.80; // 明滅しながら消える
+    b.sprite.material.opacity *= 0.82; // 明滅しながら消える
     if (b.life >= b.maxLife) {
-      scene.remove(b.line); b.line.geometry.dispose(); b.line.material.dispose();
+      scene.remove(b.sprite); b.sprite.material.dispose(); // mapは共有フレームなのでdisposeしない
       barouBolts.splice(i, 1);
     }
   }
@@ -3600,7 +3617,7 @@ function updateCharFx(dt) {
 function clearCharFx() {
   for (const p of auraParticles) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); }
   for (const g of charGhosts)    { scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose(); }
-  for (const b of barouBolts)    { scene.remove(b.line); b.line.geometry.dispose(); b.line.material.dispose(); }
+  for (const b of barouBolts)    { scene.remove(b.sprite); b.sprite.material.dispose(); }
   for (const k of kaizerBeams)   { for (const m of k.meshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } }
   auraParticles.length = 0; charGhosts.length = 0; barouBolts.length = 0; kaizerBeams.length = 0;
   clearYukiSwirl();

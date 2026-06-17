@@ -1,0 +1,5 @@
+lightning_red.png / lightning_black.png
+  元素材: "Lightning Sprite Texture" by EVIL_ENT (OpenGameArt.org)
+  https://opengameart.org/content/lightning-sprite-texture
+  ライセンス: CC0 1.0 (パブリックドメイン / 帰属不要・商用可)
+  加工: 8フレームのスプライトシートを馬狼スキル用に赤(発光)/黒へリカラー。
