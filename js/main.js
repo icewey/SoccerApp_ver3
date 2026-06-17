@@ -2521,6 +2521,30 @@ function updatePK(dt) {
 
 const loader = new FBXLoader();
 
+// オブジェクト（キャラFBX）の現在の最下点yをワールドで測る。スキンメッシュは
+// 現在のボーン姿勢を反映した bounding box を使う（バインドポーズではなく実描画姿勢）。
+function measureMinY(obj) {
+  obj.updateMatrixWorld(true);
+  let minY = Infinity;
+  obj.traverse(c => {
+    if (!c.isMesh || !c.geometry) return;
+    if (c.isSkinnedMesh && typeof c.computeBoundingBox === 'function') c.computeBoundingBox();
+    else c.geometry.computeBoundingBox();
+    const bb = (c.isSkinnedMesh && c.boundingBox) ? c.boundingBox : c.geometry.boundingBox;
+    if (!bb) return;
+    const b = bb.clone().applyMatrix4(c.matrixWorld);
+    if (b.min.y < minY) minY = b.min.y;
+  });
+  return minY;
+}
+
+// キャラの足元を、自身の親グループ内ローカル原点(y=0)へ接地する。
+// （親グループの position.y を 0 に置けば足が地面に乗る）
+function groundCharLocal(fbx) {
+  const minY = measureMinY(fbx);
+  if (isFinite(minY) && Math.abs(minY) > 0.001) fbx.position.y -= minY;
+}
+
 // FBXの単位系がキャラごとに異なる（Meshy AI出力等で固定0.01だとサイズ不正）。
 // 実寸の身長を測り1.75mに正規化し、足元をローカル原点(y=0)へ接地する共通処理。
 // 標準的な約175単位モデルは 1.75/175=0.01 となり従来のサイズと一致する。
@@ -2529,9 +2553,20 @@ function fitCharFbx(fbx) {
   const rawBox = new THREE.Box3().setFromObject(fbx);
   const rawH   = rawBox.max.y - rawBox.min.y;
   fbx.scale.setScalar(rawH > 0.01 ? (1.75 / rawH) : 0.01);
-  fbx.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(fbx);
-  if (isFinite(box.min.y) && Math.abs(box.min.y) > 0.01) fbx.position.y -= box.min.y;
+  groundCharLocal(fbx);
+}
+
+// プレイヤーキャラを idle ポーズで再接地する。バインドポーズ(T-pose)と実際の
+// アニメ姿勢で足位置がズレるキャラ（糸師冴等）が地面に埋まる/浮くのを防ぐ。
+// 全アニメ読込後（clips['idle']が利用可能）に1度だけ呼ぶ。
+function groundPlayerToIdle() {
+  if (!mixer || !character) return;
+  if (clips['idle']) {
+    const act = mixer.clipAction(clips['idle']);
+    act.reset(); act.play();
+    mixer.update(0); // 0秒進めて idle 1フレーム目の姿勢を確定
+  }
+  groundCharLocal(character);
 }
 
 const ANIM_FILES = [
@@ -2661,6 +2696,8 @@ function onCoreLoaded() {
   const pct = Math.round((coreReady / CORE_TOTAL) * 100);
   loadingBar.style.width = pct + '%';
   if (coreReady === CORE_TOTAL) {
+    // 全アニメ読込後に idle ポーズで足元を正確に接地（埋まり/浮きを補正）
+    groundPlayerToIdle();
     if (hasEnemy) { enemy.position.y = groundY; enemy.visible = true; }
     if (mode2v2) {
       for (const c of cpu2List) { c.group.position.y = groundY; c.group.visible = true; }
@@ -2918,20 +2955,11 @@ export function startGame(config) {
       const rawBox = new THREE.Box3().setFromObject(character);
       const rawH   = rawBox.max.y - rawBox.min.y;
       character.scale.setScalar(rawH > 0.01 ? (1.75 / rawH) : 0.01);
-      player.updateMatrixWorld(true);
-      const meshBox = new THREE.Box3();
-      character.traverse(c => {
-        if (c.isMesh && c.geometry) {
-          c.geometry.computeBoundingBox();
-          const b = c.geometry.boundingBox.clone().applyMatrix4(c.matrixWorld);
-          meshBox.union(b);
-        }
-      });
-      // 足元を地面(y=0)へ正確に接地（埋まり/浮きの両方を補正）。
-      if (!meshBox.isEmpty() && isFinite(meshBox.min.y) && Math.abs(meshBox.min.y) > 0.01) {
-        player.position.y -= meshBox.min.y;
-      }
-      groundY = player.position.y;
+      // 暫定接地: T-poseの足元を player グループ内のローカル原点(y=0)へ。
+      // 正確な接地は全アニメ読込後に idle ポーズで再計測する（groundPlayerToIdle）。
+      groundCharLocal(character);
+      groundY = 0; // 足元はキャラ内部で原点に揃えるため、地面の基準は常に0
+      player.position.y = 0;
       // マルチ: Host は左側(x<0)・Guest は右側(x>0) からスタート
       if (isMultiplayer) {
         player.position.x = mpRole === 'host' ? -15 : 15;
