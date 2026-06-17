@@ -455,8 +455,13 @@ let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
 let barouSkillTimer   = 0; // 馬狼スキル残り時間（>0で本体に赤黒い稲妻）
 let barouBallFxTimer  = 0; // 馬狼シュート飛行中の軌道イナズマ残り時間
 let saeSkillTimer     = 0; // 糸師冴フロー残り時間（>0で加速・奪取不可・ピンクのネオン数字残像）
-let saeShotActive     = false; // 糸師冴フロー中に放った誘導カーブシュートが飛行中
-const saeShotTarget   = new THREE.Vector3(); // 誘導先（攻撃側ゴールの左隅）
+let saeShotActive     = false; // 糸師冴フロー中に放ったカーブシュートが飛行中
+const saeShotTarget   = new THREE.Vector3(); // 終点（攻撃側ゴールの左隅・ネット内）
+const saeShotP0       = new THREE.Vector3(); // 始点（蹴った瞬間のボール位置）
+const saeShotPc       = new THREE.Vector3(); // 水平ベジェの制御点（横へ膨らませてバナナに）
+const _saeShotTmp     = new THREE.Vector3(); // 速度算出用の一時ベクトル
+let saeShotU          = 0;  // 0→1 の軌道進行パラメータ
+let saeShotDur        = 1;  // 軌道の所要時間(秒)
 
 // スキル発動中フラグの“署名”。dispatch前後で変化したら＝スキルが実際に発動した、と判定。
 // （ドリブル外でのスピン等、内部ガードで不発のときはチャージを消費しないため）
@@ -970,29 +975,63 @@ function saeFlow() {
   saeSkillTimer = SAE_FLOW_DURATION;
 }
 
-// 糸師冴フロー中のシュート: 攻撃側ゴールの「左隅」へ誘導する高速バナナシュート。
-// 初速はゴール中央寄りに撃ち出し、飛行中に左隅へ巻き込む（ballLoosePhysicsで誘導）。
-const SAE_SHOT_HSPD = 30;   // 水平初速(m/s)
-const SAE_SHOT_VY   = 6;    // 打ち出しの上向き初速（以降は誘導でvyを上書き）
-const SAE_SHOT_LOCK = 3.5;  // 左隅へ向く追従の強さ（大きいほど速く向く＝カーブがきつい）
-const SAE_CORNER_Z  = 0.82; // ゴール左隅のz位置（×GOAL_HALF_Z, ポストの少し内側）
-const SAE_CORNER_Y  = 0.7;  // 左隅の高さ(m)（低い隅を狙う）
+// 糸師冴フロー中のシュート: 物理を使わず、スクリプトされたカーブ軌道で必ず
+// ゴール左隅へ運ぶ。水平は2次ベジェ（横へ膨らむバナナ）、垂直は山なりアーチ。
+const SAE_SHOT_SPEED = 26;   // 体感速度(m/s)相当（距離→所要時間の換算に使用）
+const SAE_CORNER_Z   = 0.82; // 左隅のz位置（×GOAL_HALF_Z, ポストの少し内側）
+const SAE_CORNER_Y   = 0.7;  // 左隅の高さ(m)（低い隅を狙う）
+const SAE_BEND       = 8.0;  // 水平の膨らみ量(m)。大きいほどカーブが強い
+const SAE_ARC        = 1.8;  // 山なりアーチの最高点(m)（クロスバー2.44m未満に収める）
 function saeCurveShot() {
   // プレイヤーが攻めるゴール（ソロ/MPホスト=+X / MPゲスト=-X）
   const atkX     = (isMultiplayer && mpRole === 'guest') ? -GOAL_X : GOAL_X;
   const leftSign = atkX > 0 ? -1 : 1; // 進行方向から見た左（+X攻め=-Z / -X攻め=+Z）
-  saeShotTarget.set(atkX, SAE_CORNER_Y, leftSign * GOAL_HALF_Z * SAE_CORNER_Z);
+  // 終点はネット内（ゴールラインの少し奥）の左隅
+  saeShotTarget.set(atkX + (atkX > 0 ? 0.4 : -0.4), SAE_CORNER_Y, leftSign * GOAL_HALF_Z * SAE_CORNER_Z);
+  saeShotP0.copy(ballMesh.position);
 
-  // 初速はゴール中央(z=0)方向へ撃ち出す → 飛行中に左隅へ巻き込まれてカーブに見える。
-  const a0 = Math.atan2(atkX - ballMesh.position.x, 0 - ballMesh.position.z);
-  ballVel.set(Math.sin(a0) * SAE_SHOT_HSPD, SAE_SHOT_VY, Math.cos(a0) * SAE_SHOT_HSPD);
-  ballCurveRate = 0;        // マグナスは使わず誘導でカーブさせる
+  // 水平ベジェの制御点: 始点→終点の中点を、進行方向に対して横へ膨らませる。
+  const mx = (saeShotP0.x + saeShotTarget.x) * 0.5;
+  const mz = (saeShotP0.z + saeShotTarget.z) * 0.5;
+  const dx = saeShotTarget.x - saeShotP0.x, dz = saeShotTarget.z - saeShotP0.z;
+  const len = Math.hypot(dx, dz) || 1;
+  const perpx = -dz / len, perpz = dx / len; // 進行方向の左手ベクトル
+  saeShotPc.set(mx + perpx * SAE_BEND * leftSign, 0, mz + perpz * SAE_BEND * leftSign);
+
+  saeShotU   = 0;
+  saeShotDur = Math.min(1.5, Math.max(0.55, len / SAE_SHOT_SPEED));
+  ballCurveRate = 0;
   ballSpin.set(0, 0, 0);
-  isDribbling   = false;
-  ballOwner     = 'none';
+  isDribbling    = false;
+  ballOwner      = 'none';
   kickBallFollow = false;
-  saeShotActive = true;
+  saeShotActive  = true;
   setBallTrail(SAE_TRAIL_COLORS, THREE.AdditiveBlending); // ピンクの軌道
+}
+
+// スクリプト軌道を1フレーム進めてボール位置を直接更新する。
+// 戻り値 true=飛行中（通常物理スキップ）/ false=到達（ゴール判定へ）。
+function updateSaeShot(dt) {
+  saeShotU += dt / saeShotDur;
+  const u   = Math.min(1, saeShotU);
+  const omu = 1 - u;
+  // 水平: 2次ベジェ B(u) = (1-u)²P0 + 2(1-u)u Pc + u² Pe
+  const x = omu * omu * saeShotP0.x + 2 * omu * u * saeShotPc.x + u * u * saeShotTarget.x;
+  const z = omu * omu * saeShotP0.z + 2 * omu * u * saeShotPc.z + u * u * saeShotTarget.z;
+  // 垂直: 始点高さ→終点高さの線形 + 山なりアーチ（u=0.5で最高点）
+  const y = saeShotP0.y * omu + saeShotTarget.y * u + SAE_ARC * 4 * u * omu;
+
+  _saeShotTmp.copy(ballMesh.position);
+  ballMesh.position.set(x, y, z);
+  // トレイル/エフェクト用に擬似速度を入れておく（描画判定に使われる）
+  ballVel.copy(ballMesh.position).sub(_saeShotTmp).multiplyScalar(1 / Math.max(dt, 1e-3));
+
+  if (u >= 1) {
+    saeShotActive = false;
+    ballVel.set(0, 0, 0); // 到達点で静止させ、次フレームのゴール判定に委ねる
+    return false;
+  }
+  return true;
 }
 
 // 蜂楽: 急加速(motion2)のみのドリブル突破。
@@ -1351,7 +1390,7 @@ function updateMpHost(dt) {
   if (enemyPickupCooldown  > 0) enemyPickupCooldown  -= dt;
 
   // Host自身の千切/蜂楽/糸師冴スキル中は保持し続ける（奪われない）
-  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0 || saeSkillTimer > 0) && !isKicking) {
+  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0 || saeSkillTimer > 0) && !isKicking && !saeShotActive) {
     ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); mpCheckGoal(); return;
   }
 
@@ -1486,6 +1525,8 @@ function updateBall(dt) {
   if (goalCapture) return;  // ゴール捕捉中は updateGoalCapture がボールを駆動
   if (isGoalScene) return; // ゴールシーン中は物理停止
   if (gkBallHolder !== 'none') { isDribbling = false; return; }
+  // 糸師冴の誘導シュート飛行中は、拾得/奪取の判定を一切挟まずスクリプト軌道で駆動。
+  if (saeShotActive) { ballLoosePhysics(dt); return; }
   // 千切ブースト/蜂楽/糸師冴スキル中は奪われず保持し続ける（シュート中は除く）
   if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0 || saeSkillTimer > 0) && !isKicking) {
     ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); return;
@@ -1554,32 +1595,15 @@ function updateBall(dt) {
 // ── ルーズボール（誰も保持していない）の物理＋ゴール/壁判定（所有権非依存）──
 // updateBall（ソロ/MP）と update2v2（2vs2）で共有する。
 function ballLoosePhysics(dt) {
+  // 糸師冴の誘導カーブシュート: 物理を使わず、スクリプトされたカーブ軌道で
+  // 必ずゴール左隅へ運ぶ。飛行中(true)は通常物理をスキップし、到達したら
+  // 通常処理へ抜けてゴール判定させる。
+  if (saeShotActive && updateSaeShot(dt)) return;
+
   // 通常物理
   ballVel.y -= BALL_GRAVITY * dt;
-  // 糸師冴の誘導カーブシュート: 水平はゴール左隅へ向き続け、垂直は左隅の高さへ到達
-  // するようvyを毎フレーム解く（＝どこから撃ってもほぼ確実に左隅へ巻き込む）。
-  if (saeShotActive && ballOwner === 'none') {
-    const dx  = saeShotTarget.x - ballMesh.position.x;
-    const dz  = saeShotTarget.z - ballMesh.position.z;
-    const dxz = Math.hypot(dx, dz);
-    const hSpd = Math.hypot(ballVel.x, ballVel.z) || SAE_SHOT_HSPD;
-    // 水平: 現在の進行角を左隅方向へ指数追従（初速の中央向きから巻き込む＝カーブ）
-    const curAng = Math.atan2(ballVel.x, ballVel.z);
-    const tgtAng = Math.atan2(dx, dz);
-    let dA = tgtAng - curAng;
-    while (dA >  Math.PI) dA -= 2 * Math.PI;
-    while (dA < -Math.PI) dA += 2 * Math.PI;
-    const na = curAng + dA * Math.min(1, SAE_SHOT_LOCK * dt);
-    ballVel.x = Math.sin(na) * hSpd;
-    ballVel.z = Math.cos(na) * hSpd;
-    // 垂直: 残り時間で左隅の高さに着くようvyを設定（重力ぶんを補正）
-    const t = Math.max(0.05, dxz / hSpd);
-    ballVel.y = (saeShotTarget.y - ballMesh.position.y + 0.5 * BALL_GRAVITY * t * t) / t;
-    // ゴールラインを越えた/十分近づいたら誘導終了（以降は通常物理）
-    if (Math.abs(ballMesh.position.x) >= Math.abs(saeShotTarget.x) - 0.2 || dxz < 0.6) saeShotActive = false;
-  }
   // カーブ: 空中で水平速度ベクトルを回転させてバナナ軌道（マグナス効果）
-  else if (ballCurveRate !== 0 && ballMesh.position.y > BALL_R + 0.05) {
+  if (ballCurveRate !== 0 && ballMesh.position.y > BALL_R + 0.05) {
     const hSpd = Math.sqrt(ballVel.x * ballVel.x + ballVel.z * ballVel.z);
     if (hSpd > 0.1) {
       const a = Math.atan2(ballVel.x, ballVel.z) + ballCurveRate * dt;
@@ -4102,6 +4126,9 @@ function update2v2(dt) {
 
   // GK保持中はボール操作なし（CPUは動く）
   if (gkBallHolder !== 'none') { isDribbling = false; for (const c of cpu2List) update2v2Cpu(c, dt); return; }
+
+  // 糸師冴の誘導シュート飛行中は、所有権判定を挟まずスクリプト軌道で駆動（CPUは動く）
+  if (saeShotActive) { ballLoosePhysics(dt); for (const c of cpu2List) update2v2Cpu(c, dt); return; }
 
   // 千切/蜂楽/糸師冴スキル中はプレイヤー保持を固定
   if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0 || saeSkillTimer > 0) && !isKicking) ballOwner = 'player';
