@@ -3136,7 +3136,7 @@ const LEAD_MIN_MOVE = 0.01; // この移動量(/frame)未満は停止扱い→�
 // ギリギリまで寄りつつ、進行方向(=敵ゴール)が視野に入る。
 // tgtY を上げると視線が前方へ倒れ、遠くのゴールがフレームに入る。
 const CAM_NORMAL    = { h: 8,   dist: 16,   tgtY: 1.2 };
-const CAM_IMMERSIVE = { h: 3.4, dist: 9.0, tgtY: 2.4 };
+const CAM_IMMERSIVE = { h: 3.0, dist: 7.2, tgtY: 2.2 };
 let immersiveCam = false;
 const camRig = { h: 8, dist: 16, tgtY: 1.2 }; // 補間中のカメラ姿勢（プリセット間を滑らかに遷移）
 
