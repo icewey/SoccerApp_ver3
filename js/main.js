@@ -171,6 +171,7 @@ let enemyTackling = false;
 let enemyKicking  = false;
 let enemyPickupCooldown = 0;
 let enemyTackleCooldown = 0;
+let enemyTrack = { x: 0, z: 0, init: false }; // 知覚ボール位置（反応遅れ用）
 let hasEnemy = false;
 const ENEMY_TACKLE_COOLDOWN  = 2.5;
 
@@ -182,6 +183,10 @@ const TACKLE_COMMIT_DIST = 1.9; // この距離まで詰めて初めて仕掛け
 const DEF_AREA_DEPTH    = 24;   // 自陣ゴールからこの距離内＝危険エリア（侵入で仕掛ける）
 const BEATEN_MARGIN     = 0.4;  // ボールがゴール側へ回り込まれた（抜かれた）と見なす余裕(m)
 const POKE_CHANCE       = 0.012;// 間合い保持中に時々足を出して突くフェイント確率/フレーム
+// 守備の「人間らしい反応遅れ」: 各DFは実ボールではなく、遅れて追従する“知覚位置”
+// を見て動く。横(z)の追従を鈍らせることで、左右の切り返しに反応が遅れ隙ができる。
+const REACT_TAU_X       = 0.06; // 前後(x)追従の時定数(s)＝ほぼ即応
+const REACT_TAU_Z       = 0.26; // 左右(z)追従の時定数(s)＝大きいほど横揺さぶりに弱い
 
 // ── 2vs2 用のCPUエンティティ（味方1人＋敵2人）────────────────────────────────
 // チームA = プレイヤー＋味方(ally) / チームB = 敵2人(enemy, enemy2)。
@@ -1195,6 +1200,16 @@ function jockeyTarget(ballPos, ownGoalX) {
   );
 }
 
+// 知覚ボール位置の更新（人間らしい反応遅れ）。実ボールへ指数追従するが、
+// 横(z)の時定数を大きくして左右の切り返しへの反応を鈍らせる。DFはこの遅れた
+// 位置を“見て”動くので、素早い左右の揺さぶりに置いていかれて隙ができる。
+function trackBall(state, dt) {
+  if (!state.init) { state.x = ballMesh.position.x; state.z = ballMesh.position.z; state.init = true; }
+  state.x += (ballMesh.position.x - state.x) * (1 - Math.exp(-dt / REACT_TAU_X));
+  state.z += (ballMesh.position.z - state.z) * (1 - Math.exp(-dt / REACT_TAU_Z));
+  return state;
+}
+
 // 守備の意思決定。普段は間合いを保って寄せる(press=false)。
 // ゴール側へ回り込まれた(抜かれそう) or 自陣ディフェンスエリア侵入時だけ
 // 詰めて(press=true)、十分近ければ仕掛ける(commit=true)。稀に様子見の足出しも。
@@ -1360,6 +1375,7 @@ function updateEnemy(dt) {
   let targetPos;
   if (enemyState === 'dribble') {
     // ゴール方向へ進む（プレイヤーのドリブルと同じ方向感覚）
+    enemyTrack.init = false; // 守備復帰時は実位置から追従し直す
     targetPos = new THREE.Vector3(
       Math.max(-(GOAL_X - 4.5), enemy.position.x - 8),
       0,
@@ -1368,10 +1384,12 @@ function updateEnemy(dt) {
   } else if (ballOwner === 'player') {
     // 守備: 闇雲に突っ込まず、ゴール側に立って間合いを保ちつつジリジリ寄せる。
     // 抜かれそう／自陣ディフェンスエリア侵入の決定的瞬間だけ仕掛ける。
+    // 移動目標は“知覚ボール位置”（反応遅れあり）で決め、間合い/仕掛けは実位置で判定。
+    const seen = trackBall(enemyTrack, dt);
     const dec = containDecision(enemy.position, ballMesh.position, -GOAL_X, distToBall);
     targetPos = dec.press
-      ? new THREE.Vector3(ballMesh.position.x, 0, ballMesh.position.z) // 詰める局面はボールへ
-      : jockeyTarget(ballMesh.position, -GOAL_X);                      // 普段は間合い維持
+      ? new THREE.Vector3(seen.x, 0, seen.z)        // 詰める局面は知覚位置へ
+      : jockeyTarget(seen, -GOAL_X);                // 普段は間合い維持
     // キック中(enemyKicking)はキックclipを中断し状態が固着するため開始しない。
     if (dec.commit && !enemyTackling && !enemyKicking
         && enemyTackleCooldown <= 0 && !playerSkillBusy()) {
@@ -1381,7 +1399,8 @@ function updateEnemy(dt) {
       charAnim(enemyChar, 'tackle', false);
     }
   } else {
-    // ルーズボールは直接拾いに行く
+    // ルーズボールは直接拾いに行く（次に守備へ入る時は実位置から追従し直す）
+    enemyTrack.init = false;
     targetPos = new THREE.Vector3(ballMesh.position.x, 0, ballMesh.position.z);
   }
 
@@ -4041,6 +4060,7 @@ function makeCpu2(group, char, key, team) {
     group, char, key, team,
     stun: 0, tackling: false, kicking: false, passing: false,
     tackleCd: 0, pickupCd: 0, passCd: 0, oneShotTimer: 0, zoneZ: 0,
+    track: { x: 0, z: 0, init: false }, // 知覚ボール位置（反応遅れ用）
   };
 }
 const c2Ally   = makeCpu2(ally,   allyChar,   'ally',   'A');
@@ -4383,8 +4403,8 @@ function update2v2Cpu(c, dt) {
   const attackGoalX = c.team === 'A' ? GOAL_X : -GOAL_X;
   const teamOwns = ballOwner !== 'none' && team2(ballOwner) === c.team;
 
-  if (ballOwner === c.key) update2v2Carrier(c, attackGoalX, dt);
-  else if (teamOwns)       update2v2Support(c, attackGoalX, dt);
+  if (ballOwner === c.key) { c.track.init = false; update2v2Carrier(c, attackGoalX, dt); }
+  else if (teamOwns)       { c.track.init = false; update2v2Support(c, attackGoalX, dt); }
   else                     update2v2Defend(c, -attackGoalX, dt);
 
   charClampToField(c.char);
@@ -4461,9 +4481,11 @@ function update2v2Defend(c, defendGoalX, dt) {
     if (holder) {
       // 闇雲にプレスせず、ゴール側で間合いを保って寄せる組織守備。
       // 抜かれそう／自陣ディフェンスエリア侵入の決定的瞬間だけ仕掛ける。
+      // 移動目標は“知覚ボール位置”（反応遅れあり）で決め、間合い/仕掛けは実位置で判定。
       const d = distXZ(ball, c.group.position);
+      const seen = trackBall(c.track, dt);
       const dec = containDecision(c.group.position, ball, defendGoalX, d);
-      target = dec.press ? new THREE.Vector3(ball.x, 0, ball.z) : jockeyTarget(ball, defendGoalX);
+      target = dec.press ? new THREE.Vector3(seen.x, 0, seen.z) : jockeyTarget(seen, defendGoalX);
       if (dec.commit && c.tackleCd <= 0) {
         c.tackling = true; c.tackleCd = ENEMY_TACKLE_COOLDOWN;
         c.oneShotTimer = clips['tackle'] ? clips['tackle'].duration + 0.1 : 1.0;
@@ -4472,10 +4494,12 @@ function update2v2Defend(c, defendGoalX, dt) {
         return;
       }
     } else {
+      c.track.init = false;
       target = new THREE.Vector3(ball.x, 0, ball.z); // ルーズボールは直接プレス
     }
   } else {
     // ゾーン保持: 自陣ゴール側に構えつつ自分のゾーンZへ、ボール深さに少し追従
+    c.track.init = false;
     target = new THREE.Vector3(defendGoalX * 0.42 + ball.x * 0.28, 0, c.zoneZ * 0.6 + ball.z * 0.25);
   }
   const moving = charMoveTo(c.char, target, dt);
