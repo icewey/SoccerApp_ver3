@@ -2521,6 +2521,19 @@ function updatePK(dt) {
 
 const loader = new FBXLoader();
 
+// FBXの単位系がキャラごとに異なる（Meshy AI出力等で固定0.01だとサイズ不正）。
+// 実寸の身長を測り1.75mに正規化し、足元をローカル原点(y=0)へ接地する共通処理。
+// 標準的な約175単位モデルは 1.75/175=0.01 となり従来のサイズと一致する。
+function fitCharFbx(fbx) {
+  fbx.updateMatrixWorld(true);
+  const rawBox = new THREE.Box3().setFromObject(fbx);
+  const rawH   = rawBox.max.y - rawBox.min.y;
+  fbx.scale.setScalar(rawH > 0.01 ? (1.75 / rawH) : 0.01);
+  fbx.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(fbx);
+  if (isFinite(box.min.y) && Math.abs(box.min.y) > 0.01) fbx.position.y -= box.min.y;
+}
+
 const ANIM_FILES = [
   ['idle',    './animations/idle.fbx'],
   ['walk',    './animations/walk.fbx'],
@@ -2857,8 +2870,8 @@ export function startGame(config) {
     loader.load(
       config.mp.remoteCharFbx,
       fbx => {
-        fbx.scale.setScalar(0.01);
         fbx.rotation.y = Math.PI;
+        fitCharFbx(fbx);
         fbx.traverse(c => {
           if (c.isMesh) {
             c.castShadow = true; c.receiveShadow = true;
@@ -2887,7 +2900,6 @@ export function startGame(config) {
     config.charFbx,
     fbx => {
       character = fbx;
-      character.scale.setScalar(0.01);
       character.rotation.y = Math.PI;
       character.traverse(c => {
         if (c.isMesh) {
@@ -2898,6 +2910,14 @@ export function startGame(config) {
         }
       });
       player.add(character);
+      // スケール自動計算: FBXの単位系がキャラごとに異なる（Meshy AI出力など）ため、
+      // 固定0.01ではサイズが不正になる（糸師冴等が極端に小さくなる）。実寸の身長を
+      // 測って1.75mに正規化する。標準的な約175単位のモデルは 1.75/175=0.01 で従来同等。
+      character.scale.setScalar(1);
+      player.updateMatrixWorld(true);
+      const rawBox = new THREE.Box3().setFromObject(character);
+      const rawH   = rawBox.max.y - rawBox.min.y;
+      character.scale.setScalar(rawH > 0.01 ? (1.75 / rawH) : 0.01);
       player.updateMatrixWorld(true);
       const meshBox = new THREE.Box3();
       character.traverse(c => {
@@ -2907,7 +2927,8 @@ export function startGame(config) {
           meshBox.union(b);
         }
       });
-      if (!meshBox.isEmpty() && isFinite(meshBox.min.y) && meshBox.min.y < -0.01) {
+      // 足元を地面(y=0)へ正確に接地（埋まり/浮きの両方を補正）。
+      if (!meshBox.isEmpty() && isFinite(meshBox.min.y) && Math.abs(meshBox.min.y) > 0.01) {
         player.position.y -= meshBox.min.y;
       }
       groundY = player.position.y;
@@ -2944,8 +2965,8 @@ export function startGame(config) {
     loader.load(
       config.enemyFbx,
       fbx => {
-        fbx.scale.setScalar(0.01);
         fbx.rotation.y = Math.PI;
+        fitCharFbx(fbx);
         fbx.traverse(c => {
           if (c.isMesh) {
             c.castShadow = true;
@@ -3007,8 +3028,8 @@ export function startGame(config) {
     }
     const loadCpu2 = (group, animProxy, path, tint, sx, sz, markerColor) => {
       loader.load(path, fbx => {
-        fbx.scale.setScalar(0.01);
         fbx.rotation.y = Math.PI;
+        fitCharFbx(fbx);
         fbx.traverse(c => {
           if (c.isMesh) {
             c.castShadow = true; c.receiveShadow = true;
