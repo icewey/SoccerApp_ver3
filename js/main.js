@@ -5087,7 +5087,9 @@ function animate() {
       }
       // 右画面ダブルタップ → プレイヤーの進行方向（向き）へ素早くスナップ。
       if (viewSnapping) {
-        if (lookStick.active || keys.has('KeyQ') || keys.has('KeyE')) {
+        // ダブルタップ自体も右プニコンを active にするため、active だけでキャンセルすると
+        // スナップが即潰れる。実際に右スティックを倒した(回転入力)時のみキャンセルする。
+        if ((lookStick.active && Math.abs(lookStick.dx) > 0.05) || keys.has('KeyQ') || keys.has('KeyE')) {
           viewSnapping = false; // 手動操作が入ったらキャンセル
         } else {
           let snapDiff = player.rotation.y - viewAngle;
