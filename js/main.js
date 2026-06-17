@@ -174,6 +174,15 @@ let enemyTackleCooldown = 0;
 let hasEnemy = false;
 const ENEMY_TACKLE_COOLDOWN  = 2.5;
 
+// ── 守備AIの間合い（ジョッキー＝突っ込まずに寄せる組織守備のパラメータ）─────────
+// 闇雲にタックルせず、ゴール側に立って一定の間合いを保ちつつジリジリ寄せ、
+// 「抜かれそう／自陣ディフェンスエリアに侵入された」決定的な瞬間だけ仕掛ける。
+const CONTAIN_STANDOFF  = 2.6;  // ジョッキー時に保つボールとの間合い(m)
+const TACKLE_COMMIT_DIST = 1.9; // この距離まで詰めて初めて仕掛けを検討する(m)
+const DEF_AREA_DEPTH    = 24;   // 自陣ゴールからこの距離内＝危険エリア（侵入で仕掛ける）
+const BEATEN_MARGIN     = 0.4;  // ボールがゴール側へ回り込まれた（抜かれた）と見なす余裕(m)
+const POKE_CHANCE       = 0.012;// 間合い保持中に時々足を出して突くフェイント確率/フレーム
+
 // ── 2vs2 用のCPUエンティティ（味方1人＋敵2人）────────────────────────────────
 // チームA = プレイヤー＋味方(ally) / チームB = 敵2人(enemy, enemy2)。
 // 敵#1は既存の enemy グループを流用し、味方と敵#2を新規に用意する。
@@ -1173,6 +1182,31 @@ function charTackleForward(char, dt) {
   char.group.position.addScaledVector(f, RUN_SPEED * 1.3 * dt);
 }
 
+// ── 守備ジョッキー（プレイヤー・CPU 共通の組織守備部品）─────────────────────
+// ボールと自陣ゴールを結ぶ線上で、ボールより standoff だけゴール寄りに構える目標。
+// これで「抜かれにくい位置取りのまま一定の間合いを保つ」動きになる。
+function jockeyTarget(ballPos, ownGoalX) {
+  const ux = ballPos.x - ownGoalX, uz = ballPos.z; // ゴール→ボール方向
+  const len = Math.hypot(ux, uz) || 1;
+  return new THREE.Vector3(
+    ballPos.x - (ux / len) * CONTAIN_STANDOFF,
+    0,
+    ballPos.z - (uz / len) * CONTAIN_STANDOFF
+  );
+}
+
+// 守備の意思決定。普段は間合いを保って寄せる(press=false)。
+// ゴール側へ回り込まれた(抜かれそう) or 自陣ディフェンスエリア侵入時だけ
+// 詰めて(press=true)、十分近ければ仕掛ける(commit=true)。稀に様子見の足出しも。
+function containDecision(defPos, ballPos, ownGoalX, dist) {
+  const goalSign = Math.sign(ownGoalX) || 1;
+  const beaten   = (ballPos.x - defPos.x) * goalSign > BEATEN_MARGIN;
+  const inDanger = Math.abs(ballPos.x - ownGoalX) < DEF_AREA_DEPTH;
+  const press    = beaten || inDanger;
+  const commit   = dist < TACKLE_COMMIT_DIST && (press || Math.random() < POKE_CHANCE);
+  return { press, commit };
+}
+
 // ドリブル時のボール配置（プレイヤー・CPU 共通）
 function charDribble(char, dt) {
   const facing = new THREE.Vector3(-Math.sin(char.group.rotation.y), 0, -Math.cos(char.group.rotation.y));
@@ -1331,18 +1365,24 @@ function updateEnemy(dt) {
       0,
       enemy.position.z * 0.4
     );
-  } else {
-    // ボールを追う
-    targetPos = new THREE.Vector3(ballMesh.position.x, 0, ballMesh.position.z);
-    // タックル（プレイヤーと同じ距離で試みる）。キック中(enemyKicking)は
-    // キックclipを中断して状態が固着するため開始しない。
-    if (ballOwner === 'player' && distToBall < 3.0 && !enemyTackling && !enemyKicking
+  } else if (ballOwner === 'player') {
+    // 守備: 闇雲に突っ込まず、ゴール側に立って間合いを保ちつつジリジリ寄せる。
+    // 抜かれそう／自陣ディフェンスエリア侵入の決定的瞬間だけ仕掛ける。
+    const dec = containDecision(enemy.position, ballMesh.position, -GOAL_X, distToBall);
+    targetPos = dec.press
+      ? new THREE.Vector3(ballMesh.position.x, 0, ballMesh.position.z) // 詰める局面はボールへ
+      : jockeyTarget(ballMesh.position, -GOAL_X);                      // 普段は間合い維持
+    // キック中(enemyKicking)はキックclipを中断し状態が固着するため開始しない。
+    if (dec.commit && !enemyTackling && !enemyKicking
         && enemyTackleCooldown <= 0 && !playerSkillBusy()) {
       enemyTackling = true;
       enemyTackleCooldown = ENEMY_TACKLE_COOLDOWN;
       enemyTackleTimer = clips['tackle'] ? clips['tackle'].duration + 0.1 : 1.0;
       charAnim(enemyChar, 'tackle', false);
     }
+  } else {
+    // ルーズボールは直接拾いに行く
+    targetPos = new THREE.Vector3(ballMesh.position.x, 0, ballMesh.position.z);
   }
 
   // 自陣GKがキャッチ保持中は、スローを受けて速攻するため敵ゴール方向へ進出する。
@@ -4020,7 +4060,6 @@ const playerEntity2 = { key: 'player', group: player, char: playerChar, get stun
 
 const PASS_INTERCEPT_R = 1.8;  // パス軌道のカット判定半径(m)
 const SUPPORT_MIN_SEP  = 7.0;  // サポート時にボール保持者へ密着しない最小距離
-const CPU_TACKLE_RANGE = 3.0;  // CPUがタックルを試みる距離
 const ZONE_BAND        = 0.55; // ゾーン幅係数（×FIELD_HALF_D）
 
 let passState = null; // パス飛行中の状態 { passerKey, receiverKey, cutterKey, timer }
@@ -4417,17 +4456,23 @@ function update2v2Defend(c, defendGoalX, dt) {
   const inMyZone = Math.abs(ball.z - c.zoneZ) < FIELD_HALF_D * ZONE_BAND;
   let target;
   if (inMyZone && isClosestDefender2(c)) {
-    target = new THREE.Vector3(ball.x, 0, ball.z); // プレス
-    if (ballOwner !== 'none' && !sameTeam2(c.key, ballOwner)
-        && !(ballOwner === 'player' && playerSkillBusy())) { // スキル中のプレイヤーには仕掛けない
+    const holder = ballOwner !== 'none' && !sameTeam2(c.key, ballOwner)
+                && !(ballOwner === 'player' && playerSkillBusy()); // スキル中のプレイヤーには仕掛けない
+    if (holder) {
+      // 闇雲にプレスせず、ゴール側で間合いを保って寄せる組織守備。
+      // 抜かれそう／自陣ディフェンスエリア侵入の決定的瞬間だけ仕掛ける。
       const d = distXZ(ball, c.group.position);
-      if (d < CPU_TACKLE_RANGE && c.tackleCd <= 0) {
+      const dec = containDecision(c.group.position, ball, defendGoalX, d);
+      target = dec.press ? new THREE.Vector3(ball.x, 0, ball.z) : jockeyTarget(ball, defendGoalX);
+      if (dec.commit && c.tackleCd <= 0) {
         c.tackling = true; c.tackleCd = ENEMY_TACKLE_COOLDOWN;
         c.oneShotTimer = clips['tackle'] ? clips['tackle'].duration + 0.1 : 1.0;
         charAnim(c.char, 'tackle', false);
         charTackleForward(c.char, dt);
         return;
       }
+    } else {
+      target = new THREE.Vector3(ball.x, 0, ball.z); // ルーズボールは直接プレス
     }
   } else {
     // ゾーン保持: 自陣ゴール側に構えつつ自分のゾーンZへ、ボール深さに少し追従
