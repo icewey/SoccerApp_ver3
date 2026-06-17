@@ -3292,6 +3292,9 @@ const LEAD_MIN_MOVE = 0.01; // この移動量(/frame)未満は停止扱い→�
 // tgtY を上げると視線が前方へ倒れ、遠くのゴールがフレームに入る。
 const CAM_NORMAL    = { h: 8,   dist: 16,   tgtY: 1.2 };
 const CAM_IMMERSIVE = { h: 1.8, dist: 7.2, tgtY: 2.0 };
+// 視点回転(右プニコン/Q/E)のピボット高さ。プレイヤー本体中心を中心に世界が回る
+// ようにする（目線/前方リードを中心にすると回転時に違和感が出るため分離）。
+const CAM_PIVOT_Y   = 0.9;
 let immersiveCam = true; // デフォルトで没入モードON
 const camRig = { ...CAM_IMMERSIVE }; // 補間中のカメラ姿勢（プリセット間を滑らかに遷移）。初期は没入
 
@@ -5017,12 +5020,19 @@ function animate() {
     camRig.tgtY += (camPreset.tgtY - camRig.tgtY) * ct;
 
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, viewAngle, 0));
-    const camOffset   = new THREE.Vector3(0, camRig.h, camRig.dist).applyQuaternion(q);
-    const idealTarget = player.position.clone().add(new THREE.Vector3(0, camRig.tgtY, 0)).add(camLead);
+    const camOffset = new THREE.Vector3(0, camRig.h, camRig.dist).applyQuaternion(q);
+    // 回転ピボットはプレイヤー本体中心。ここを中心に世界が回る（リード/目線で
+    // ズラさないので、右プニコンで回しても中心がブレない）。
+    const pivot = player.position.clone().add(new THREE.Vector3(0, CAM_PIVOT_Y, 0));
     const t = Math.min(1, 9 * dt);
-    smoothCamTarget.lerp(idealTarget, t);
+    smoothCamTarget.lerp(pivot, t);
     camera.position.copy(smoothCamTarget).add(camOffset);
-    camera.lookAt(smoothCamTarget);
+    // 見る先(画面中心)はピボットより少し上＋進行方向リードでフレーミング。
+    // この offset は viewAngle 非依存なので回転ピボットには影響しない。
+    const lookAt = smoothCamTarget.clone()
+      .add(new THREE.Vector3(0, camRig.tgtY - CAM_PIVOT_Y, 0))
+      .add(camLead);
+    camera.lookAt(lookAt);
   } // end gameStarted
 
   if (window._updateMobileButtons) window._updateMobileButtons();
