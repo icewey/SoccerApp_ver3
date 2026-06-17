@@ -3563,13 +3563,12 @@ function updateCharFx(dt) {
     }
     // 士道はゴースト残像なし。黄＆ピンクの水玉オーラのみ（上の spawnAuraParticle）。
 
-    // 馬狼スキル中: 本体に赤黒い稲妻を高速明滅で複数発生
+    // 馬狼スキル中: 本体にまとう稲妻は控えめに（たまに1本だけ明滅）
     if (barouSkillTimer > 0) {
       _barouBoltTimer += dt;
-      if (_barouBoltTimer >= 0.025) {
+      if (_barouBoltTimer >= 0.11) {
         _barouBoltTimer = 0;
-        const n = 3 + Math.floor(Math.random() * 3);
-        for (let k = 0; k < n; k++) spawnBarouBolt();
+        if (Math.random() < 0.6) spawnBarouBolt(); // 6割の確率で1本だけ
       }
     }
 
