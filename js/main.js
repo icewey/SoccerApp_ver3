@@ -419,6 +419,7 @@ const SKILL_BY_CHAR = {
   shidou:  'shidou_smash',  // 士道: オーバーヘッド・スマッシュシュート（黄＆ピンク残像）
   kaizer:  'kaizer_impact', // カイザー: 超高速ストレートシュート（青白レーザービーム）
   yukimiya: 'yukimiya_gyro',// 雪宮: ドリブルからのジャイロシュート（弧を描く蹴り上げ）
+  sae:     'sae_flow',      // 糸師冴: フロー状態。10秒間 加速＋奪取不可＋ピンクのネオン数字残像
 };
 let playerSkill  = 'spin';
 let enemyCharId  = null;  // 敵CPUのキャラID（玲王のコピー用にスキルを引く）
@@ -430,11 +431,12 @@ let reoSkills = []; // [{ id, skill, name }]
 const CHAR_SHORT = {
   tensei: '天才', nekketsu: '熱血', reio: '玲王', nagi: '凪', barou: '馬狼',
   chigiri: '千切', bachira: '蜂楽', shidou: '士道', kaizer: 'カイザー', yukimiya: '雪宮',
+  sae: '糸師冴',
 };
 const SKILL_SHORT = {
   fake_volley: 'ボレー', barou_curve: 'カーブ', chigiri_boost: '加速',
   bachira_dash: 'フェイント', shidou_smash: 'スマッシュ', kaizer_impact: '高速弾',
-  yukimiya_gyro: 'ジャイロ', spin: 'スピン',
+  yukimiya_gyro: 'ジャイロ', sae_flow: 'フロー', spin: 'スピン',
 };
 // 玲王エフェクト用の紫パレット（ボール軌道/オーラ/残像/ビーム/稲妻を上書き）
 const REO_FX1 = 0x9b30ff; // 鮮やかな紫
@@ -449,6 +451,7 @@ let bachiraSkillTotal = 0;
 let bachiraDashStart  = 0; // motion2（急加速）が始まる経過時刻
 let barouSkillTimer   = 0; // 馬狼スキル残り時間（>0で本体に赤黒い稲妻）
 let barouBallFxTimer  = 0; // 馬狼シュート飛行中の軌道イナズマ残り時間
+let saeSkillTimer     = 0; // 糸師冴フロー残り時間（>0で加速・奪取不可・ピンクのネオン数字残像）
 
 // スキル発動中フラグの“署名”。dispatch前後で変化したら＝スキルが実際に発動した、と判定。
 // （ドリブル外でのスピン等、内部ガードで不発のときはチャージを消費しないため）
@@ -457,7 +460,8 @@ function skillActiveSig() {
     + (isKicking ? '1' : '0')
     + (chigiriBoostTimer > 0 ? '1' : '0')
     + (bachiraSkillTimer > 0 ? '1' : '0')
-    + (shidouJumpTimer  > 0 ? '1' : '0');
+    + (shidouJumpTimer  > 0 ? '1' : '0')
+    + (saeSkillTimer    > 0 ? '1' : '0');
 }
 
 // スキルボタン/キーの共通エントリ。所持スキルに応じて分岐。
@@ -490,6 +494,7 @@ function fireSkillByName(name) {
   else if (name === 'shidou_smash')  shidouSmash();
   else if (name === 'kaizer_impact') kaizerImpact();
   else if (name === 'yukimiya_gyro') yukimiyaGyro();
+  else if (name === 'sae_flow')      saeFlow();
   else startSpin();
 }
 
@@ -951,6 +956,15 @@ function chigiriBoost() {
   chigiriBoostTimer = combo ? combo.duration : 1.8;
 }
 
+// 糸師冴: フロー状態。発動から10秒間、移動速度がわずかに上がり・ボール奪取不可・
+// ピンクのネオン数字が残像のように舞う（専用モーションは無し＝通常ドリブルのまま）。
+const SAE_FLOW_DURATION = 10.0;
+const SAE_SPEED_MULT    = 1.25; // 「気持ち速くなる」程度（千切の2.0より控えめ）
+function saeFlow() {
+  if (ballOwner !== 'player' || saeSkillTimer > 0) return;
+  saeSkillTimer = SAE_FLOW_DURATION;
+}
+
 // 蜂楽: 急加速(motion2)のみのドリブル突破。
 // 黄オーラをまとい、発動時に周囲にいる敵を「！」でフリーズ。奪取不可。
 const BACHIRA_BLEND      = 0.1;
@@ -1125,14 +1139,15 @@ const CHAR_COLL_R = 0.45; // 1キャラの衝突半径（合計 約0.9mまで近
 
 function playerInSkill() {
   return isKicking || isPassing || isTackling || isSpinning
-    || bachiraSkillTimer > 0 || chigiriBoostTimer > 0 || shidouJumpTimer > 0;
+    || bachiraSkillTimer > 0 || chigiriBoostTimer > 0 || shidouJumpTimer > 0
+    || saeSkillTimer > 0;
 }
 // スキルモーション中はボールを奪われない（隙をなくす）。ボール保持に関わる
 // スキル状態のみ（パス=手放す/タックル=非保持 は含めない）。
 function playerSkillBusy() {
   return isSpinning || isKicking
     || chigiriBoostTimer > 0 || bachiraSkillTimer > 0
-    || shidouJumpTimer > 0 || barouSkillTimer > 0;
+    || shidouJumpTimer > 0 || barouSkillTimer > 0 || saeSkillTimer > 0;
 }
 function enemyInSkill() { return enemyKicking || enemyTackling; }
 function cpu2InSkill(c) { return c.kicking || c.passing || c.tackling || c.oneShotTimer > 0; }
@@ -1305,8 +1320,8 @@ function updateMpHost(dt) {
   if (playerPickupCooldown > 0) playerPickupCooldown -= dt;
   if (enemyPickupCooldown  > 0) enemyPickupCooldown  -= dt;
 
-  // Host自身の千切/蜂楽スキル中は保持し続ける（奪われない）
-  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0) && !isKicking) {
+  // Host自身の千切/蜂楽/糸師冴スキル中は保持し続ける（奪われない）
+  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0 || saeSkillTimer > 0) && !isKicking) {
     ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); mpCheckGoal(); return;
   }
 
@@ -1441,8 +1456,8 @@ function updateBall(dt) {
   if (goalCapture) return;  // ゴール捕捉中は updateGoalCapture がボールを駆動
   if (isGoalScene) return; // ゴールシーン中は物理停止
   if (gkBallHolder !== 'none') { isDribbling = false; return; }
-  // 千切ブースト/蜂楽スキル中は奪われず保持し続ける（シュート中は除く）
-  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0) && !isKicking) {
+  // 千切ブースト/蜂楽/糸師冴スキル中は奪われず保持し続ける（シュート中は除く）
+  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0 || saeSkillTimer > 0) && !isKicking) {
     ballOwner = 'player'; isDribbling = true; charDribble(playerChar, dt); return;
   }
 
@@ -2139,6 +2154,7 @@ function mpResetAfterGoal() {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
+  saeSkillTimer = 0;
   bachiraSkillTimer = 0; nagiSkillTimer = 0;
   barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
@@ -2258,6 +2274,7 @@ function resetAfterGoal(scorer) {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
+  saeSkillTimer = 0;
   bachiraSkillTimer = 0; nagiSkillTimer = 0;
   barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
@@ -2429,6 +2446,7 @@ function pkPlaceForKick() {
   tackleLungeTimer = playerStunTimer = enemyStunTimer = enemyTackleTimer = 0;
   skillSession++; // 保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
+  saeSkillTimer = 0;
   bachiraSkillTimer = 0; nagiSkillTimer = 0;
   barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
@@ -2726,6 +2744,7 @@ export function startGame(config) {
 
   skillSession++; // 前ゲームの保留中スキルtimeoutを無効化
   chigiriBoostTimer = 0;
+  saeSkillTimer = 0;
   bachiraSkillTimer = 0; nagiSkillTimer = 0;
   barouSkillTimer = 0; barouBallFxTimer = 0;
   shidouJumpTimer = 0;
@@ -3386,6 +3405,58 @@ function spawnCharGhost(color) {
   charGhosts.push({ mesh, life: 0, maxLife: 0.35, baseOp: 0.45 });
 }
 
+// ── 糸師冴: ピンクのネオン数字が残像のように舞うエフェクト ───────────────────
+// Canvasで0〜9をネオン発光に焼いたテクスチャを初回だけ生成し再利用。
+// 各数字スプライトは少し上に漂いながらフェードして「残像」を作る。
+const saeGlyphs    = [];
+const _saeDigitTex = [];
+let _saeGlyphTimer = 0;
+function _ensureSaeDigits() {
+  if (_saeDigitTex.length) return;
+  for (let d = 0; d <= 9; d++) {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 128;
+    const ctx = cv.getContext('2d');
+    ctx.font = 'bold 100px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // 外側のピンクのグロー（2度塗りで濃く）→ 内側の明るいコア
+    ctx.shadowColor = '#ff2d9b';
+    ctx.shadowBlur  = 26;
+    ctx.fillStyle   = '#ff4fa8';
+    ctx.fillText(String(d), 64, 70);
+    ctx.fillText(String(d), 64, 70);
+    ctx.shadowBlur  = 8;
+    ctx.fillStyle   = '#ffd9ec';
+    ctx.fillText(String(d), 64, 70);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    _saeDigitTex.push(tex);
+  }
+}
+function spawnSaeGlyph() {
+  _ensureSaeDigits();
+  const tex = _saeDigitTex[(Math.random() * 10) | 0];
+  const mat = new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthWrite: false,
+    opacity: 0.9, blending: THREE.AdditiveBlending,
+    color: isReo() ? REO_FX1 : 0xffffff, // 玲王コピー時は紫に上書き
+  });
+  const sp = new THREE.Sprite(mat);
+  const a  = Math.random() * Math.PI * 2;
+  const r  = 0.3 + Math.random() * 0.6;
+  const sz = 0.45 + Math.random() * 0.4;
+  sp.scale.set(sz, sz, 1);
+  sp.position.set(
+    player.position.x + Math.cos(a) * r,
+    0.4 + Math.random() * 1.7,
+    player.position.z + Math.sin(a) * r
+  );
+  sp.renderOrder = 998;
+  scene.add(sp);
+  saeGlyphs.push({ sprite: sp, life: 0, maxLife: 0.6 + Math.random() * 0.5, vy: 0.2 + Math.random() * 0.4 });
+}
+
 // ── 馬狼: 本体にまとう赤黒い稲妻エフェクト ─────────────────────────────────
 // VFX/lightning_red|black.png（CC0スプライトシート: 8フレーム×128x512）を
 // フリップブックとしてビルボード表示する。手続き的なLineより質感のある稲妻。
@@ -3534,6 +3605,7 @@ function updateCharFx(dt) {
   if (chigiriBoostTimer > 0) chigiriBoostTimer -= dt;
   if (barouSkillTimer > 0)   barouSkillTimer -= dt;
   if (barouBallFxTimer > 0)  barouBallFxTimer -= dt;
+  if (saeSkillTimer > 0)     saeSkillTimer -= dt;
 
   // 発生: 凪=常時黒オーラ / 千切=ブースト中ピンクのオーラ＋残像
   if (gameStarted && !isGoalScene) {
@@ -3548,6 +3620,13 @@ function updateCharFx(dt) {
       if (shidouJumpTimer > 0)            spawnAuraParticle(player, Math.random() < 0.5 ? 0xffd400 : 0xff3399, THREE.AdditiveBlending);
       // 雪宮スキル中: オレンジのオーラ
       if (yukiTimer > 0 || yukiSwirling)  spawnAuraParticle(player, 0xff7a00, THREE.AdditiveBlending);
+      // 糸師冴フロー中: 黒×紫がかった暗いオーラ（ネオン数字を引き立てる地）
+      if (saeSkillTimer > 0)              spawnAuraParticle(player, 0x12001a, THREE.NormalBlending);
+    }
+    // 糸師冴フロー中: ピンクのネオン数字が残像のように舞う
+    if (saeSkillTimer > 0) {
+      _saeGlyphTimer += dt;
+      if (_saeGlyphTimer >= 0.05) { _saeGlyphTimer = 0; spawnSaeGlyph(); spawnSaeGlyph(); }
     }
     if (chigiriBoostTimer > 0) {
       _ghostTimer += dt;
@@ -3611,14 +3690,23 @@ function updateCharFx(dt) {
     g.mesh.material.opacity = g.baseOp * (1 - t);
     if (g.life >= g.maxLife) { scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose(); charGhosts.splice(i, 1); }
   }
+  for (let i = saeGlyphs.length - 1; i >= 0; i--) {
+    const g = saeGlyphs[i];
+    g.life += dt;
+    const t = g.life / g.maxLife;
+    g.sprite.position.y += g.vy * dt;
+    g.sprite.material.opacity = 0.9 * (1 - t);
+    if (g.life >= g.maxLife) { scene.remove(g.sprite); g.sprite.material.dispose(); saeGlyphs.splice(i, 1); }
+  }
 }
 
 function clearCharFx() {
   for (const p of auraParticles) { scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); }
   for (const g of charGhosts)    { scene.remove(g.mesh); g.mesh.geometry.dispose(); g.mesh.material.dispose(); }
+  for (const g of saeGlyphs)     { scene.remove(g.sprite); g.sprite.material.dispose(); }
   for (const b of barouBolts)    { scene.remove(b.sprite); b.sprite.material.dispose(); }
   for (const k of kaizerBeams)   { for (const m of k.meshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } }
-  auraParticles.length = 0; charGhosts.length = 0; barouBolts.length = 0; kaizerBeams.length = 0;
+  auraParticles.length = 0; charGhosts.length = 0; saeGlyphs.length = 0; barouBolts.length = 0; kaizerBeams.length = 0;
   clearYukiSwirl();
 }
 
@@ -3881,8 +3969,8 @@ function update2v2(dt) {
   // GK保持中はボール操作なし（CPUは動く）
   if (gkBallHolder !== 'none') { isDribbling = false; for (const c of cpu2List) update2v2Cpu(c, dt); return; }
 
-  // 千切/蜂楽スキル中はプレイヤー保持を固定
-  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0) && !isKicking) ballOwner = 'player';
+  // 千切/蜂楽/糸師冴スキル中はプレイヤー保持を固定
+  if ((chigiriBoostTimer > 0 || bachiraSkillTimer > 0 || saeSkillTimer > 0) && !isKicking) ballOwner = 'player';
 
   // パス飛行中は所有権判定を止めて専用処理へ
   if (passState) { update2v2PassFlight(dt); return; }
@@ -3913,7 +4001,7 @@ function update2v2Possession(dt) {
   const DR = DRIBBLE_DIST;
   // 千切/蜂楽=保持し続ける（手放さない）。スピンや他スキルは手放し判定はそのまま
   // だが、奪取は playerSkillBusy() で全面ブロックする。
-  const skillHold = (chigiriBoostTimer > 0 || bachiraSkillTimer > 0);
+  const skillHold = (chigiriBoostTimer > 0 || bachiraSkillTimer > 0 || saeSkillTimer > 0);
   // 手放し: プレイヤー
   if (ballOwner === 'player') {
     const dp = distXZ(ballMesh.position, player.position);
@@ -4621,7 +4709,8 @@ function animate() {
 
       if (moveVec.lengthSq() > 0.001) {
         moveVec.normalize();
-        const moveSpeed = RUN_SPEED * (chigiriBoostTimer > 0 ? CHIGIRI_SPEED_MULT : 1);
+        const moveSpeed = RUN_SPEED * (chigiriBoostTimer > 0 ? CHIGIRI_SPEED_MULT
+          : (saeSkillTimer > 0 ? SAE_SPEED_MULT : 1));
         player.position.addScaledVector(moveVec, moveSpeed * dt);
 
         if (wantTurn) {

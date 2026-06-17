@@ -95,6 +95,15 @@ const CHARACTERS = [
     color: '#7fd8ff',
     available: true,
   },
+  {
+    id: 'sae',
+    name: '糸師冴的キャラ',
+    number: '10',
+    fbx: './キャラ/糸師冴的なキャラ/T-Pose.fbx',
+    portrait: './キャラ/糸師冴的なキャラ/ベースイラスト/正面.png',
+    color: '#ff2d9b',
+    available: true,
+  },
 ];
 
 let selectedIdx = 0;
