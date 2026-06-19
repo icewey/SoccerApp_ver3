@@ -246,7 +246,7 @@ const joyBase  = document.getElementById('joystick-base');
 const joyKnob  = document.getElementById('joystick-knob');
 
 // ── 右プニコン（カメラ水平回転）───────────────────────────────────────────
-// 左プニコン=移動、右プニコン=カメラアングルを水平に回す。デフォルトの自動追従は無し。
+// 左プニコン=移動、右プニコン=カメラアングルを水平に回す。離すとデフォルト視点へ自動復帰。
 const lookStick = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
 const joyBaseR  = document.getElementById('joystick-base-r');
 const joyKnobR  = document.getElementById('joystick-knob-r');
@@ -264,8 +264,28 @@ const SNAP_MOVE_LOCK_SEC = 0.2;
 let snapMoveLockTimer = 0;
 const snapMoveLockDir = new THREE.Vector3();
 
-// カメラ視点角（Q/E/右プニコン/ダブルタップで制御。プレイヤー体の向きとは独立）
+// カメラ視点角（自動追従＋Q/E/右プニコン/ダブルタップで制御。プレイヤー体の向きとは独立）
 let viewAngle = 0;
+// デフォルト視点の自動追従レート（手動操作を離した時にここへ滑らかに戻る）
+const AUTO_VIEW_RATE = 5;
+
+// デフォルトのカメラ目標角を返す。
+//  - ボール保持中: 敵ゴール方向を向く（攻める方向が常に画面奥）。
+//  - それ以外    : ボール方向を向く。
+// camFwd = (-sin(viewAngle), 0, -cos(viewAngle)) なので角度は atan2(-dirX, -dirZ)。
+function defaultViewAngle() {
+  let dirX, dirZ;
+  if (ballOwner === 'player') {
+    const atkX = (isMultiplayer && mpRole === 'guest') ? -GOAL_X : GOAL_X;
+    dirX = atkX - player.position.x;
+    dirZ = -player.position.z; // ゴール中央(z=0)へ
+  } else {
+    dirX = ballMesh.position.x - player.position.x;
+    dirZ = ballMesh.position.z - player.position.z;
+  }
+  if (Math.abs(dirX) < 1e-4 && Math.abs(dirZ) < 1e-4) return viewAngle; // ほぼ同位置→現状維持
+  return Math.atan2(-dirX, -dirZ);
+}
 
 // curve: 0=直線 / +1=右利き(右へ蹴り出し左へ曲がる) / -1=左利き(左右反転)
 // power: チャージ量から決まる威力。大きいほど初速・飛距離・浮きが伸びる。
@@ -5094,10 +5114,12 @@ function animate() {
       }
     }
 
-    // ── カメラアングル制御（右プニコン / ダブルタップ）──────────────────────
-    // デフォルトの自動追従（ボール/向きへ自動回転）は廃止。カメラは右プニコン・
-    // Q/E・右画面ダブルタップでのみ動く。
+    // ── カメラアングル制御（自動追従 / 右プニコン / ダブルタップ）─────────────
+    // デフォルト: カメラはボール方向（ボール保持中は敵ゴール方向）を向く。
+    // 右画面スワイプ(右プニコン)・Q/E で手動回転でき、離すとデフォルトへ戻る。
     if (!playerFrozenBySetPiece()) {
+      const lookingManually = (lookStick.active && Math.abs(lookStick.dx) > 0.05)
+        || keys.has('KeyQ') || keys.has('KeyE');
       // 右プニコン: 水平の倒し量に比例してカメラを水平回転（レート制御）。
       if (lookStick.active && Math.abs(lookStick.dx) > 0.05) {
         viewAngle -= lookStick.dx * LOOK_STICK_RATE * dt;
@@ -5106,7 +5128,7 @@ function animate() {
       if (viewSnapping) {
         // ダブルタップ自体も右プニコンを active にするため、active だけでキャンセルすると
         // スナップが即潰れる。実際に右スティックを倒した(回転入力)時のみキャンセルする。
-        if ((lookStick.active && Math.abs(lookStick.dx) > 0.05) || keys.has('KeyQ') || keys.has('KeyE')) {
+        if (lookingManually) {
           viewSnapping = false; // 手動操作が入ったらキャンセル
         } else {
           let snapDiff = player.rotation.y - viewAngle;
@@ -5115,6 +5137,12 @@ function animate() {
           viewAngle += snapDiff * Math.min(1, VIEW_SNAP_RATE * dt);
           if (Math.abs(snapDiff) < 0.03) viewSnapping = false;
         }
+      } else if (!lookingManually) {
+        // 手動操作なし → デフォルト視点（ボール/敵ゴール方向）へ滑らかに追従/復帰。
+        let d = defaultViewAngle() - viewAngle;
+        while (d >  Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        viewAngle += d * Math.min(1, AUTO_VIEW_RATE * dt);
       }
     }
 
